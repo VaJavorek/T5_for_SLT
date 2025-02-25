@@ -3,6 +3,7 @@ import json
 import torch
 import argparse
 import numpy as np
+from datetime import datetime
 from dotenv import load_dotenv
 from transformers import T5Tokenizer
 from model.configuration_t5 import SignT5Config
@@ -139,61 +140,63 @@ def collate_fn(batch, max_sequence_length, max_token_length, pose_dim):
 
 def evaluate_model(model, dataloader, tokenizer, evaluation_config):
     from datetime import datetime
-    def print_stage(stage):
+    def log_message(message, log_file):
         current_time = datetime.now().strftime("%H:%M:%S")
-        print(f"[{current_time} GMT+1] {stage}")
+        log_line = f"[{current_time} GMT+1] {message}"
+        print(log_line)
+        log_file.write(log_line + "\n")
+        log_file.flush()
         
-    print_stage("Starting model evaluation")
-    model.eval()
-    predictions, labels = [], []
-    
-    # Determine model dtype
-    model_dtype = next(model.parameters()).dtype
-    
-    # Get total number of batches
-    total_batches = len(dataloader)
-    print_stage(f"Beginning inference loop with {total_batches} batches")
-    
-    with torch.no_grad():
-        for step, batch in enumerate(dataloader):
-            if step % 10 == 0:
-                print_stage(f"Processing batch {step}/{total_batches}")
+    with open("evaluation.log", "w") as log_file:
+        log_message("Starting model evaluation", log_file)
+        model.eval()
+        predictions, labels = [], []
+        
+        # Determine model dtype
+        model_dtype = next(model.parameters()).dtype
+        
+        # Get total number of batches
+        total_batches = len(dataloader)
+        log_message(f"Beginning inference loop with {total_batches} batches", log_file)
+        
+        with torch.no_grad():
+            for step, batch in enumerate(dataloader):
+                if step % 10 == 0:
+                    log_message(f"Processing batch {step}/{total_batches}", log_file)
+                    
+                # Convert batch to the same dtype as the model
+                batch = {k: v.to(model.base_model.device).to(model_dtype) for k, v in batch.items()}
                 
-            # Convert batch to the same dtype as the model
-            batch = {k: v.to(model.base_model.device).to(model_dtype) for k, v in batch.items()}
-            
-            if len(batch['labels'].shape) < 2:
-                batch['labels'] = batch['labels'].unsqueeze(0)
-            
-            # print_stage(f"Generating outputs for batch {step}/{total_batches}")
-            outputs = model.generate(
-                **batch,
-                early_stopping=model.config.early_stopping,
-                no_repeat_ngram_size=model.config.no_repeat_ngram_size,
-                max_length=evaluation_config['max_sequence_length'],
-                num_beams=model.config.num_beams,
-                bos_token_id=tokenizer.pad_token_id,
-                length_penalty=model.config.length_penalty,
-                output_attentions=True,
-                return_dict_in_generate=True
-            )
-            
-            sequences = outputs.sequences
-            
-            # Replace invalid tokens with <unk>
-            if len(np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]) > 0:
-                print(f'Replacing <unk> for illegal tokens found on indexes {np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]}')
-            sequences[sequences > len(tokenizer) - 1] = tokenizer.unk_token_id
+                if len(batch['labels'].shape) < 2:
+                    batch['labels'] = batch['labels'].unsqueeze(0)
+                
+                outputs = model.generate(
+                    **batch,
+                    early_stopping=model.config.early_stopping,
+                    no_repeat_ngram_size=model.config.no_repeat_ngram_size,
+                    max_length=evaluation_config['max_sequence_length'],
+                    num_beams=model.config.num_beams,
+                    bos_token_id=tokenizer.pad_token_id,
+                    length_penalty=model.config.length_penalty,
+                    output_attentions=True,
+                    return_dict_in_generate=True
+                )
+                
+                sequences = outputs.sequences
+                
+                # Replace invalid tokens with <unk>
+                if len(np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]) > 0:
+                    log_message(f'Replacing <unk> for illegal tokens found on indexes {np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]}', log_file)
+                sequences[sequences > len(tokenizer) - 1] = tokenizer.unk_token_id
 
-            # print_stage(f"Decoding predictions for batch {step}/{total_batches}")
-            decoded_preds = tokenizer.batch_decode(sequences, skip_special_tokens=True)
-            decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
+                decoded_preds = tokenizer.batch_decode(sequences, skip_special_tokens=True)
+                decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
 
-            predictions.extend(decoded_preds)
-            labels.extend([[translation] for translation in decoded_labels])
-    
-    print_stage("Completed model evaluation")
-    return predictions, labels
+                predictions.extend(decoded_preds)
+                labels.extend([[translation] for translation in decoded_labels])
+        
+        log_message("Completed model evaluation", log_file)
+        return predictions, labels
 
 
 def get_sign_input_dim(config):
@@ -206,122 +209,126 @@ def get_sign_input_dim(config):
 
 def main():
     from datetime import datetime
-    def print_stage(stage):
+    def log_message(message, log_file):
         current_time = datetime.now().strftime("%H:%M:%S")
-        print(f"[{current_time} GMT+1] {stage}")
+        log_line = f"[{current_time} GMT+1] {message}"
+        print(log_line)
+        log_file.write(log_line + "\n")
+        log_file.flush()
 
-    print_stage("Starting script")
-    args = parse_args()
-    if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
-        print('Loading config...')
-    config = load_config(args.config_file)
-    config = update_config(config, args)
+    with open("evaluation.log", "a") as log_file:
+        log_message("Starting script", log_file)
+        args = parse_args()
+        if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
+            log_message('Loading config...', log_file)
+        config = load_config(args.config_file)
+        config = update_config(config, args)
 
-    print_stage("Loading model configuration")
-    evaluation_config = config['EvaluationArguments']
-    model_config = config['ModelArguments']
-    model_config['sign_input_dim'] = get_sign_input_dim(config)
+        log_message("Loading model configuration", log_file)
+        evaluation_config = config['EvaluationArguments']
+        model_config = config['ModelArguments']
+        model_config['sign_input_dim'] = get_sign_input_dim(config)
 
-    # Initialize the custom model
-    t5_config = SignT5Config()
-    for param, value in model_config.items():
-        if param not in vars(t5_config):
-            print('f{param} not in SignT5Config. It may be ignored...}')
-        t5_config.__setattr__(param, value)
+        # Initialize the custom model
+        t5_config = SignT5Config()
+        for param, value in model_config.items():
+            if param not in vars(t5_config):
+                log_message(f'{param} not in SignT5Config. It may be ignored...', log_file)
+            t5_config.__setattr__(param, value)
 
-    print_stage("Loading model and tokenizer")
-    # Load model and tokenizer
-    model = T5ModelForSLT.from_pretrained(evaluation_config['model_dir'], config=t5_config)
-    model.config.output_attentions = True
-    for param in model.parameters(): param.data = param.data.contiguous()
-    tokenizer = T5Tokenizer.from_pretrained(model.config.base_model_name, clean_up_tokenization_spaces=True)
+        log_message("Loading model and tokenizer", log_file)
+        # Load model and tokenizer
+        model = T5ModelForSLT.from_pretrained(evaluation_config['model_dir'], config=t5_config)
+        model.config.output_attentions = True
+        for param in model.parameters(): param.data = param.data.contiguous()
+        tokenizer = T5Tokenizer.from_pretrained(model.config.base_model_name, clean_up_tokenization_spaces=True)
 
-    print_stage("Preparing dataset")
-    # Prepare dataset
-    dataset = DatasetForSLT(tokenizer= tokenizer,
-                                sign_data_args=config['SignDataArguments'],
-                                split=evaluation_config['split'],
-                                skip_frames=evaluation_config['skip_frames'],
-                                max_token_length=evaluation_config['max_token_length'],
-                                max_sequence_length=evaluation_config['max_sequence_length'],
-                                max_samples=evaluation_config['max_val_samples'],
-                                )
+        log_message("Preparing dataset", log_file)
+        # Prepare dataset
+        dataset = DatasetForSLT(tokenizer= tokenizer,
+                                    sign_data_args=config['SignDataArguments'],
+                                    split=evaluation_config['split'],
+                                    skip_frames=evaluation_config['skip_frames'],
+                                    max_token_length=evaluation_config['max_token_length'],
+                                    max_sequence_length=evaluation_config['max_sequence_length'],
+                                    max_samples=evaluation_config['max_val_samples'],
+                                    )
 
-    dataloader = torch.utils.data.DataLoader(
-        dataset,
-        batch_size=evaluation_config['batch_size'],
-        collate_fn=lambda batch: collate_fn(
-            batch,
-            max_sequence_length=evaluation_config['max_sequence_length'],
-            max_token_length=evaluation_config['max_token_length'],
-            pose_dim=config['SignModelArguments']['projectors']['pose']['dim'],
-        ),
-    )
+        dataloader = torch.utils.data.DataLoader(
+            dataset,
+            batch_size=evaluation_config['batch_size'],
+            collate_fn=lambda batch: collate_fn(
+                batch,
+                max_sequence_length=evaluation_config['max_sequence_length'],
+                max_token_length=evaluation_config['max_token_length'],
+                pose_dim=config['SignModelArguments']['projectors']['pose']['dim'],
+            ),
+        )
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model.to(device)
-    
-    # Print device information
-    print_stage(f"Using device: {device}")
-    if device == "cuda":
-        print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(f"CUDA available: {torch.cuda.is_available()}")
-        print(f"CUDA device count: {torch.cuda.device_count()}")
-    
-    # Print model parameter information
-    param = next(model.parameters())
-    print(f"Model parameter device: {param.device}")
-    print(f"Model parameter dtype: {param.dtype}")
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model.to(device)
+        
+        # Print device information
+        log_message(f"Using device: {device}", log_file)
+        if device == "cuda":
+            log_message(f"GPU: {torch.cuda.get_device_name(0)}", log_file)
+            log_message(f"CUDA available: {torch.cuda.is_available()}", log_file)
+            log_message(f"CUDA device count: {torch.cuda.device_count()}", log_file)
+        
+        # Print model parameter information
+        param = next(model.parameters())
+        log_message(f"Model parameter device: {param.device}", log_file)
+        log_message(f"Model parameter dtype: {param.dtype}", log_file)
 
-    print_stage("Running model evaluation")
-    predictions, labels = evaluate_model(model, dataloader, tokenizer, evaluation_config)
+        log_message("Running model evaluation", log_file)
+        predictions, labels = evaluate_model(model, dataloader, tokenizer, evaluation_config)
 
-    print_stage("Post-processing predictions")
-    # Postprocess predictions and references
-    decoded_preds, decoded_labels = postprocess_text(predictions, [ref[0] for ref in labels])
+        log_message("Post-processing predictions", log_file)
+        # Postprocess predictions and references
+        decoded_preds, decoded_labels = postprocess_text(predictions, [ref[0] for ref in labels])
 
-    if args.verbose:
-        for i in range(min(5, len(decoded_preds))):
-            print("Prediction:", decoded_preds[i])
-            print("Reference:", decoded_labels[i])
-            print("-" * 50)
+        if args.verbose:
+            for i in range(min(5, len(decoded_preds))):
+                log_message(f"Prediction: {decoded_preds[i]}", log_file)
+                log_message(f"Reference: {decoded_labels[i]}", log_file)
+                log_message("-" * 50, log_file)
 
-    print_stage("Computing metrics")
-    # Compute metrics
-    sacrebleu = evaluate.load('sacrebleu')
-    result = sacrebleu.compute(predictions=decoded_preds, references=decoded_labels)
-    result = {
-        "bleu": result["score"],
-        'bleu-1': result['precisions'][0],
-        'bleu-2': result['precisions'][1],
-        'bleu-3': result['precisions'][2],
-        'bleu-4': result['precisions'][3],
-    }
-
-    result = {k: round(v, 4) for k, v in result.items()}
-
-    if args.verbose:
-        for key, value in result.items():
-            print(f"{key}: {value:.4f}")
-
-    print_stage("Saving predictions")
-    # Save predictions
-    all_predictions = [
-        {
-            "prediction": pred,
-            "reference": ref
+        log_message("Computing metrics", log_file)
+        # Compute metrics
+        sacrebleu = evaluate.load('sacrebleu')
+        result = sacrebleu.compute(predictions=decoded_preds, references=decoded_labels)
+        result = {
+            "bleu": result["score"],
+            'bleu-1': result['precisions'][0],
+            'bleu-2': result['precisions'][1],
+            'bleu-3': result['precisions'][2],
+            'bleu-4': result['precisions'][3],
         }
-        for pred, ref in zip(decoded_preds, decoded_labels)
-    ]
-    all_predictions = {'metrics': result, 'predictions': all_predictions[:100]}
 
-    os.makedirs(evaluation_config['output_dir'], exist_ok=True)
-    prediction_file = os.path.join(evaluation_config['output_dir'], "predictions.json")
-    with open(prediction_file, "w") as f:
-        json.dump(all_predictions, f, ensure_ascii=False, indent=4)
+        result = {k: round(v, 4) for k, v in result.items()}
 
-    print(f"Predictions saved to {prediction_file}")
-    print_stage("Script completed")
+        if args.verbose:
+            for key, value in result.items():
+                log_message(f"{key}: {value:.4f}", log_file)
+
+        log_message("Saving predictions", log_file)
+        # Save predictions
+        all_predictions = [
+            {
+                "prediction": pred,
+                "reference": ref
+            }
+            for pred, ref in zip(decoded_preds, decoded_labels)
+        ]
+        all_predictions = {'metrics': result, 'predictions': all_predictions[:100]}
+
+        os.makedirs(evaluation_config['output_dir'], exist_ok=True)
+        prediction_file = os.path.join(evaluation_config['output_dir'], "predictions.json")
+        with open(prediction_file, "w") as f:
+            json.dump(all_predictions, f, ensure_ascii=False, indent=4)
+
+        log_message(f"Predictions saved to {prediction_file}", log_file)
+        log_message("Script completed", log_file)
 
 if __name__ == "__main__":
     main()
