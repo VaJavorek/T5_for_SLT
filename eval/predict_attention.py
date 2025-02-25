@@ -138,20 +138,34 @@ def collate_fn(batch, max_sequence_length, max_token_length, pose_dim):
     }
 
 def evaluate_model(model, dataloader, tokenizer, evaluation_config):
+    from datetime import datetime
+    def print_stage(stage):
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"[{current_time} GMT+1] {stage}")
+        
+    print_stage("Starting model evaluation")
     model.eval()
     predictions, labels = [], []
     
     # Determine model dtype
     model_dtype = next(model.parameters()).dtype
     
+    # Get total number of batches
+    total_batches = len(dataloader)
+    print_stage(f"Beginning inference loop with {total_batches} batches")
+    
     with torch.no_grad():
         for step, batch in enumerate(dataloader):
+            if step % 10 == 0:
+                print_stage(f"Processing batch {step}/{total_batches}")
+                
             # Convert batch to the same dtype as the model
             batch = {k: v.to(model.base_model.device).to(model_dtype) for k, v in batch.items()}
             
             if len(batch['labels'].shape) < 2:
                 batch['labels'] = batch['labels'].unsqueeze(0)
             
+            # print_stage(f"Generating outputs for batch {step}/{total_batches}")
             outputs = model.generate(
                 **batch,
                 early_stopping=model.config.early_stopping,
@@ -171,11 +185,14 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
                 print(f'Replacing <unk> for illegal tokens found on indexes {np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]}')
             sequences[sequences > len(tokenizer) - 1] = tokenizer.unk_token_id
 
+            # print_stage(f"Decoding predictions for batch {step}/{total_batches}")
             decoded_preds = tokenizer.batch_decode(sequences, skip_special_tokens=True)
             decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
 
             predictions.extend(decoded_preds)
             labels.extend([[translation] for translation in decoded_labels])
+    
+    print_stage("Completed model evaluation")
     return predictions, labels
 
 
@@ -188,12 +205,19 @@ def get_sign_input_dim(config):
 
 
 def main():
+    from datetime import datetime
+    def print_stage(stage):
+        current_time = datetime.now().strftime("%H:%M:%S")
+        print(f"[{current_time} GMT+1] {stage}")
+
+    print_stage("Starting script")
     args = parse_args()
     if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
         print('Loading config...')
     config = load_config(args.config_file)
     config = update_config(config, args)
 
+    print_stage("Loading model configuration")
     evaluation_config = config['EvaluationArguments']
     model_config = config['ModelArguments']
     model_config['sign_input_dim'] = get_sign_input_dim(config)
@@ -205,12 +229,14 @@ def main():
             print('f{param} not in SignT5Config. It may be ignored...}')
         t5_config.__setattr__(param, value)
 
+    print_stage("Loading model and tokenizer")
     # Load model and tokenizer
     model = T5ModelForSLT.from_pretrained(evaluation_config['model_dir'], config=t5_config)
     model.config.output_attentions = True
     for param in model.parameters(): param.data = param.data.contiguous()
     tokenizer = T5Tokenizer.from_pretrained(model.config.base_model_name, clean_up_tokenization_spaces=True)
 
+    print_stage("Preparing dataset")
     # Prepare dataset
     dataset = DatasetForSLT(tokenizer= tokenizer,
                                 sign_data_args=config['SignDataArguments'],
@@ -234,9 +260,23 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
+    
+    # Print device information
+    print_stage(f"Using device: {device}")
+    if device == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(f"CUDA available: {torch.cuda.is_available()}")
+        print(f"CUDA device count: {torch.cuda.device_count()}")
+    
+    # Print model parameter information
+    param = next(model.parameters())
+    print(f"Model parameter device: {param.device}")
+    print(f"Model parameter dtype: {param.dtype}")
 
+    print_stage("Running model evaluation")
     predictions, labels = evaluate_model(model, dataloader, tokenizer, evaluation_config)
 
+    print_stage("Post-processing predictions")
     # Postprocess predictions and references
     decoded_preds, decoded_labels = postprocess_text(predictions, [ref[0] for ref in labels])
 
@@ -246,6 +286,7 @@ def main():
             print("Reference:", decoded_labels[i])
             print("-" * 50)
 
+    print_stage("Computing metrics")
     # Compute metrics
     sacrebleu = evaluate.load('sacrebleu')
     result = sacrebleu.compute(predictions=decoded_preds, references=decoded_labels)
@@ -263,6 +304,7 @@ def main():
         for key, value in result.items():
             print(f"{key}: {value:.4f}")
 
+    print_stage("Saving predictions")
     # Save predictions
     all_predictions = [
         {
@@ -279,6 +321,7 @@ def main():
         json.dump(all_predictions, f, ensure_ascii=False, indent=4)
 
     print(f"Predictions saved to {prediction_file}")
+    print_stage("Script completed")
 
 if __name__ == "__main__":
     main()
