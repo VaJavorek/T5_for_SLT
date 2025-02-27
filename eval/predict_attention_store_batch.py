@@ -151,7 +151,7 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
     all_cross_attentions = []
     predictions, labels = [], []
 
-    with open("evaluation.log", "w") as log_file:
+    with open("evaluation.log", "a") as log_file:
         log_message("Starting model evaluation", log_file)
         model.eval()
         total_batches = len(dataloader)
@@ -184,13 +184,22 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
                     # Each element: tensor of shape [batch_size, num_heads, seq_len, seq_len]
                     enc_attn = [layer_attn.detach().cpu().tolist() for layer_attn in outputs.encoder_attentions]
                     all_encoder_attentions.append(enc_attn)
+                
                 if hasattr(outputs, "decoder_attentions"):
-                    # Decoder self-attentions (typically only for the final step if not all steps are returned)
-                    dec_attn = [layer_attn.detach().cpu().tolist() for layer_attn in outputs.decoder_attentions]
+                    # Decoder attentions are tuples for each generation step
+                    # Each tuple contains tensors for each layer
+                    dec_attn = []
+                    for step_attentions in outputs.decoder_attentions:
+                        step_attn = [layer_attn.detach().cpu().tolist() for layer_attn in step_attentions]
+                        dec_attn.append(step_attn)
                     all_decoder_attentions.append(dec_attn)
+                
                 if hasattr(outputs, "cross_attentions"):
-                    # Cross-attentions over encoder outputs.
-                    cross_attn = [layer_attn.detach().cpu().tolist() for layer_attn in outputs.cross_attentions]
+                    # Cross attentions are also tuples for each generation step
+                    cross_attn = []
+                    for step_attentions in outputs.cross_attentions:
+                        step_attn = [layer_attn.detach().cpu().tolist() for layer_attn in step_attentions]
+                        cross_attn.append(step_attn)
                     all_cross_attentions.append(cross_attn)
 
                 # Fix any illegal token IDs.
