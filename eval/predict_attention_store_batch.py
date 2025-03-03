@@ -17,6 +17,8 @@ import yaml
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+# set KMP_DUPLICATE_LIB_OK=TRUE
+
 load_dotenv()
 
 def parse_args():
