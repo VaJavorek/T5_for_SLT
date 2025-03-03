@@ -146,12 +146,22 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
         log_file.write(log_line + "\n")
         log_file.flush()
 
-    all_encoder_attentions = []
-    all_decoder_attentions = []
-    all_cross_attentions = []
-    predictions, labels = [], []
+    def save_attention_batch(batch_idx, enc_attn, dec_attn, cross_attn, output_dir):
+        """Save attention data for current batch"""
+        batch_data = {
+            "encoder_attentions": enc_attn,
+            "decoder_attentions": dec_attn,
+            "cross_attentions": cross_attn,
+        }
+        os.makedirs(os.path.join(output_dir, "attention_batches"), exist_ok=True)
+        with open(os.path.join(output_dir, "attention_batches", f"batch_{batch_idx}.json"), "w") as f:
+            json.dump(batch_data, f)
 
+    predictions, labels = [], []
+    
     with open("evaluation.log", "a") as log_file:
+        model_dtype = next(model.parameters()).dtype
+        log_message(f"Model dtype: {model_dtype}", log_file)
         log_message("Starting model evaluation", log_file)
         model.eval()
         total_batches = len(dataloader)
@@ -161,7 +171,10 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
             for step, batch in enumerate(dataloader):
                 if step % 10 == 0:
                     log_message(f"Processing batch {step}/{total_batches}", log_file)
-                batch = {k: v.to(model.base_model.device) for k, v in batch.items()}
+                
+                # Convert batch to model's dtype and move to device
+                batch = {k: v.to(model.base_model.device).to(model_dtype) for k, v in batch.items()}
+                
                 if len(batch['labels'].shape) < 2:
                     batch['labels'] = batch['labels'].unsqueeze(0)
                 
@@ -179,30 +192,35 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
 
                 sequences = outputs.sequences
 
-                # Extract and store attentions, if present.
+                # Process attention weights for current batch
+                enc_attn = []
+                dec_attn = []
+                cross_attn = []
+
                 if hasattr(outputs, "encoder_attentions"):
                     # Each element: tensor of shape [batch_size, num_heads, seq_len, seq_len]
                     enc_attn = [layer_attn.detach().cpu().tolist() for layer_attn in outputs.encoder_attentions]
-                    all_encoder_attentions.append(enc_attn)
                 
                 if hasattr(outputs, "decoder_attentions"):
                     # Decoder attentions are tuples for each generation step
                     # Each tuple contains tensors for each layer
-                    dec_attn = []
                     for step_attentions in outputs.decoder_attentions:
                         step_attn = [layer_attn.detach().cpu().tolist() for layer_attn in step_attentions]
                         dec_attn.append(step_attn)
-                    all_decoder_attentions.append(dec_attn)
                 
                 if hasattr(outputs, "cross_attentions"):
                     # Cross attentions are also tuples for each generation step
-                    cross_attn = []
                     for step_attentions in outputs.cross_attentions:
                         step_attn = [layer_attn.detach().cpu().tolist() for layer_attn in step_attentions]
                         cross_attn.append(step_attn)
-                    all_cross_attentions.append(cross_attn)
 
-                # Fix any illegal token IDs.
+                # Save attention weights for current batch
+                save_attention_batch(step, enc_attn, dec_attn, cross_attn, evaluation_config['output_dir'])
+
+                # Clear variables to free memory
+                del enc_attn, dec_attn, cross_attn
+
+                # Process predictions
                 if len(np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]) > 0:
                     log_message(f'Replacing <unk> for illegal tokens found on indexes {np.where(sequences.cpu().numpy() > len(tokenizer) - 1)[1]}', log_file)
                 sequences[sequences > len(tokenizer) - 1] = tokenizer.unk_token_id
@@ -212,19 +230,12 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
 
                 predictions.extend(decoded_preds)
                 labels.extend([[translation] for translation in decoded_labels])
+
+                # Clear CUDA cache periodically
+                if step % 50 == 0:
+                    torch.cuda.empty_cache()
                 
         log_message("Completed model evaluation", log_file)
-
-    # Save attention data to a JSON file.
-    attn_data = {
-        "encoder_attentions": all_encoder_attentions,
-        "decoder_attentions": all_decoder_attentions,
-        "cross_attentions": all_cross_attentions,
-    }
-    attn_output_path = os.path.join(evaluation_config['output_dir'], "attentions.json")
-    os.makedirs(evaluation_config['output_dir'], exist_ok=True)
-    with open(attn_output_path, "w") as attn_file:
-        json.dump(attn_data, attn_file)
     
     return predictions, labels
 
