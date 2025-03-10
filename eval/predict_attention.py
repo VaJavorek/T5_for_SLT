@@ -150,7 +150,7 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
         log_file.write(log_line + "\n")
         log_file.flush()
         
-    with open("evaluation_baseline.log", "a") as log_file:
+    with open("evaluation.log", "a") as log_file:
         log_message("Starting model evaluation", log_file)
         model.eval()
         predictions, labels = [], []
@@ -219,7 +219,7 @@ def main():
         log_file.write(log_line + "\n")
         log_file.flush()
 
-    with open("evaluation_baseline.log", "a") as log_file:
+    with open("evaluation.log", "a") as log_file:
         log_message("Starting script", log_file)
         args = parse_args()
         if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
