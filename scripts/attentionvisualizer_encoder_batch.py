@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Define the path to the folder with JSON files
-folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple/'
+folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple_labeled/'
 
 # Toggle to show only the top-left 100×100 region of each matrix
 crop_attention = True
@@ -13,6 +13,18 @@ crop_size = 100
 # Create a subfolder for saving plots
 plot_folder = os.path.join(folder_path, "plots")
 os.makedirs(plot_folder, exist_ok=True)
+
+def create_title_with_translation(filename, layer_info, translation, max_chars=50):
+    """
+    Creates a title with the translation text, wrapping if too long.
+    """
+    # Truncate and add ellipsis if translation is too long
+    if len(translation) > max_chars:
+        translation = translation[:max_chars] + "..."
+    
+    # Split title into two lines
+    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    return title
 
 # Grid dimensions: 3 rows, 4 columns for 12 heads
 rows, cols = 3, 4
@@ -27,8 +39,9 @@ for filename in json_files:
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
-    # Retrieve encoder attentions
+    # Retrieve encoder attentions and reference translation
     encoder_attentions = data['encoder_attentions']
+    reference_translation = data['reference_translations'][0]
     num_layers = len(encoder_attentions)
     
     # Batch size is 1, so always use batch_index 0
@@ -37,14 +50,16 @@ for filename in json_files:
     # Loop through each encoder layer in this file
     for layer_index in range(num_layers):
         # Create a figure with a 3×4 grid of subplots
-        fig, axes = plt.subplots(rows, cols, figsize=(12, 8))
+        fig, axes = plt.subplots(rows, cols, figsize=(12, 9))  # Increased height for title
         axes = axes.flatten()
 
-        # Main title indicating the file and layer being visualized
-        fig.suptitle(
-            f"File: {filename}\nEncoder Layer {layer_index+1} - Batch Item {batch_index+1}",
-            fontsize=14
+        # Main title indicating the file, layer, and translation
+        title = create_title_with_translation(
+            filename,
+            f"Encoder Layer {layer_index+1} - Batch Item {batch_index+1}",
+            reference_translation
         )
+        fig.suptitle(title, fontsize=12, wrap=True)
 
         # Number of heads for this layer
         num_heads = len(encoder_attentions[layer_index][batch_index])
@@ -74,7 +89,7 @@ for filename in json_files:
         # Tight layout to reduce extra spacing
         plt.tight_layout()
         # Adjust top margin to accommodate the main title
-        plt.subplots_adjust(top=0.80)
+        plt.subplots_adjust(top=0.8)
 
         # Construct output filename and save the figure
         out_filename = f"{os.path.splitext(filename)[0]}_layer{layer_index+1}.png"
