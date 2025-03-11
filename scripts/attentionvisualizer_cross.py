@@ -163,6 +163,68 @@ for filename in json_files:
     plt.savefig(out_filepath, dpi=150)
     plt.close(fig)
     print(f"Saved aggregated cross attention plot (auto-cropped): {out_filepath}")
+    
+    # 2.5) HISTOGRAM OF COLUMN SUMS FOR AVERAGED MATRICES
+    # Create a folder for these histogram plots
+    cross_avg_hist_folder = os.path.join(folder_path, "cross_avg_histograms")
+    os.makedirs(cross_avg_hist_folder, exist_ok=True)
+    
+    # Create a new figure for the histograms
+    fig, axes = plt.subplots(3, 4, figsize=(12, 9))
+    axes = axes.flatten()
+    
+    title = create_title_with_translation(
+        filename,
+        "Attention Distribution (Column Sums of Averaged Cross-Attention)",
+        reference_translation
+    )
+    fig.suptitle(title, fontsize=12, wrap=True)
+    
+    for head in range(num_heads):
+        # Get the averaged matrix for this head
+        matrix = avg_matrices[head]
+        
+        # Sum along the rows to get column sums (attention distribution across input sequence)
+        col_sums = np.sum(matrix, axis=0)
+        
+        # Find non-zero regions to crop the histogram
+        non_zero_indices = np.where(col_sums > CROP_THRESHOLD)[0]
+        if len(non_zero_indices) > 0:
+            start_idx = max(0, non_zero_indices[0])
+            end_idx = min(len(col_sums), non_zero_indices[-1] + 1)
+            
+            # Crop the column sums
+            cropped_col_sums = col_sums[start_idx:end_idx]
+            
+            # Plot as a bar chart/histogram
+            axes[head].bar(range(len(cropped_col_sums)), cropped_col_sums)
+            axes[head].set_title(f"Head {head+1}", fontsize=10)
+            
+            # Add x-axis label showing the range
+            axes[head].set_xlabel(f"Tokens {start_idx}-{end_idx-1}", fontsize=8)
+        else:
+            # If no significant values, plot empty
+            axes[head].bar([0], [0])
+            axes[head].set_title(f"Head {head+1} (No significant attention)", fontsize=10)
+        
+        # Remove x-axis ticks to reduce clutter
+        axes[head].set_xticks([])
+        
+        # Add y-axis label only for leftmost plots
+        if head % 4 == 0:
+            axes[head].set_ylabel("Attention Sum")
+    
+    # Remove unused subplots
+    for ax in axes[num_heads:]:
+        ax.remove()
+    
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.8)
+    out_filename = f"{os.path.splitext(filename)[0]}_cross_avg_histograms.png"
+    out_filepath = os.path.join(cross_avg_hist_folder, out_filename)
+    plt.savefig(out_filepath, dpi=150)
+    plt.close(fig)
+    print(f"Saved histogram of column sums: {out_filepath}")
 
     # 3) AVERAGE PER LAYER ACROSS HEADS VISUALIZATION (Auto-cropped)
     # Create a folder for these plots
