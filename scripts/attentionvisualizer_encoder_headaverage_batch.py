@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Path to the folder with JSON files
-folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple/'
+folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple_labeled/'
 
 # Create a subfolder for saving average plots
 avg_plot_folder = os.path.join(folder_path, "average_plots_auto_crop_square")
@@ -12,6 +12,18 @@ os.makedirs(avg_plot_folder, exist_ok=True)
 
 # Threshold for deciding if a row/column is "non-zero" (helps with floating precision)
 NONZERO_THRESHOLD = 1e-9
+
+def create_title_with_translation(filename, layer_info, translation, max_chars=50):
+    """
+    Creates a title with the translation text, wrapping if too long.
+    """
+    # Truncate and add ellipsis if translation is too long
+    if len(translation) > max_chars:
+        translation = translation[:max_chars] + "..."
+    
+    # Split title into two lines
+    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    return title
 
 def find_global_bounding_box(matrices, threshold=NONZERO_THRESHOLD):
     """
@@ -82,8 +94,9 @@ for filename in json_files:
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
-    # Retrieve encoder attentions
+    # Retrieve encoder attentions and reference translation
     encoder_attentions = data['encoder_attentions']
+    reference_translation = data['reference_translations'][0]
     num_layers = len(encoder_attentions)
 
     # We know batch size is 1, so batch_index = 0
@@ -128,14 +141,16 @@ for filename in json_files:
 
     # -- Plot the averaged heads in a 3×4 grid (square-cropped) --
     rows, cols = 3, 4
-    fig, axes = plt.subplots(rows, cols, figsize=(12, 8))
+    fig, axes = plt.subplots(rows, cols, figsize=(12, 9))  # Increased height for title
     axes = axes.flatten()
 
-    # Main title
-    fig.suptitle(
-        f"File: {filename}\nAveraged Attention (Auto-Cropped Square), Batch 1",
-        fontsize=14
+    # Main title with translation
+    title = create_title_with_translation(
+        filename,
+        "Averaged Attention (Auto-Cropped Square), Batch 1",
+        reference_translation
     )
+    fig.suptitle(title, fontsize=12, wrap=True)
 
     # Plot each head's averaged matrix
     for head in range(num_heads):
@@ -151,7 +166,7 @@ for filename in json_files:
         ax.remove()
 
     plt.tight_layout()
-    plt.subplots_adjust(top=0.80)
+    plt.subplots_adjust(top=0.8)  # Increased top margin for title
 
     # Save the figure
     out_filename = f"{os.path.splitext(filename)[0]}_avg_heads_auto_crop_square.png"
