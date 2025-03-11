@@ -6,7 +6,7 @@ import matplotlib.pyplot as plt
 # Change directory if needed
 os.chdir('/auto/brno2/home/javorek/T5_for_SLT/')
 
-folder_path = os.path.join('results', 'attention_batches_simple')
+folder_path = os.path.join('results', 'attention_batches_simple_labeled')
 cross_plot_folder = os.path.join(folder_path, "cross_plots_auto_crop")
 os.makedirs(cross_plot_folder, exist_ok=True)
 
@@ -45,6 +45,18 @@ def crop_2d(matrix, bbox):
     min_r, max_r, min_c, max_c = bbox
     return matrix[min_r:max_r+1, min_c:max_c+1]
 
+def create_title_with_translation(filename, layer_info, translation, max_chars=50):
+    """
+    Creates a title with the translation text, wrapping if too long.
+    """
+    # Truncate and add ellipsis if translation is too long
+    if len(translation) > max_chars:
+        translation = translation[:max_chars] + "..."
+    
+    # Split title into two lines
+    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    return title
+
 json_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.json')])
 
 for filename in json_files:
@@ -57,18 +69,23 @@ for filename in json_files:
     cross_attentions = data['cross_attentions']
     cross_attentions = np.array(cross_attentions)  # Convert to np array for easier slicing
     
+    # Get the reference translation (assuming one translation per file)
+    reference_translation = data['reference_translations'][0]
+    
     num_steps, num_layers, batch_size, num_heads, _, seq_len = cross_attentions.shape
     batch_index = 0  # always 0 if batch size is 1
 
     # 1) PER-LAYER VISUALIZATION (Auto-cropped)
     for layer_index in range(num_layers):
-        fig, axes = plt.subplots(3, 4, figsize=(12, 8))
+        fig, axes = plt.subplots(3, 4, figsize=(12, 9))  # Increased height for title
         axes = axes.flatten()
 
-        fig.suptitle(
-            f"File: {filename}\nCross-Attention - Layer {layer_index+1} (Auto-Cropped)",
-            fontsize=14
+        title = create_title_with_translation(
+            filename,
+            f"Cross-Attention - Layer {layer_index+1} (Auto-Cropped)",
+            reference_translation
         )
+        fig.suptitle(title, fontsize=12, wrap=True)
 
         for head in range(num_heads):
             # cross_matrix has shape (num_steps, seq_len)
@@ -91,7 +108,7 @@ for filename in json_files:
             ax.remove()
 
         plt.tight_layout()
-        plt.subplots_adjust(top=0.85)
+        plt.subplots_adjust(top=0.8)  # Increased top margin for title
 
         out_filename = f"{os.path.splitext(filename)[0]}_cross_layer{layer_index+1}_auto_crop.png"
         out_filepath = os.path.join(cross_plot_folder, out_filename)
@@ -113,12 +130,15 @@ for filename in json_files:
         avg_matrices.append(avg_matrix)
 
     # Now plot the averaged matrices
-    fig, axes = plt.subplots(3, 4, figsize=(12, 8))
+    fig, axes = plt.subplots(3, 4, figsize=(12, 9))  # Increased height for title
     axes = axes.flatten()
-    fig.suptitle(
-        f"File: {filename}\nAggregated Cross-Attention (Averaged Across Layers, Auto-Cropped)",
-        fontsize=14
+    
+    title = create_title_with_translation(
+        filename,
+        "Aggregated Cross-Attention (Averaged Across Layers, Auto-Cropped)",
+        reference_translation
     )
+    fig.suptitle(title, fontsize=12, wrap=True)
 
     for head in range(num_heads):
         # Auto-crop each head's averaged matrix
@@ -137,7 +157,7 @@ for filename in json_files:
         ax.remove()
 
     plt.tight_layout()
-    plt.subplots_adjust(top=0.85)
+    plt.subplots_adjust(top=0.8)  # Increased top margin for title
     out_filename = f"{os.path.splitext(filename)[0]}_cross_avg_heads_auto_crop.png"
     out_filepath = os.path.join(cross_avg_plot_folder, out_filename)
     plt.savefig(out_filepath, dpi=150)
