@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Define the path to the folder with JSON files
-folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple_labeled/'
+folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple_labeled_tokens/'
 
 # Toggle to show only the top-left 100×100 region of each matrix
 crop_attention = True
@@ -14,7 +14,7 @@ crop_size = 100
 plot_folder = os.path.join(folder_path, "plots")
 os.makedirs(plot_folder, exist_ok=True)
 
-def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=100):
     """
     Creates a title with both the reference translation and prediction text, wrapping if too long.
     """

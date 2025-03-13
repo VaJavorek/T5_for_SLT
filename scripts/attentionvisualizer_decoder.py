@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 os.chdir('/auto/brno2/home/javorek/T5_for_SLT/')
 
 # Folder containing JSON files with attention batches
-folder_path = os.path.join('results', 'attention_batches_simple_labeled')
+folder_path = os.path.join('results', 'attention_batches_simple_labeled_tokens')
 
 # Create output folders for decoder self-attention plots
 decoder_plot_folder = os.path.join(folder_path, "decoder_plots_auto_crop")
@@ -46,7 +46,7 @@ def crop_2d(matrix, bbox):
     min_r, max_r, min_c, max_c = bbox
     return matrix[min_r:max_r+1, min_c:max_c+1]
 
-def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=100):
     """Create a multi-line title including file, layer info, reference and prediction."""
     if len(translation) > max_chars:
         translation = translation[:max_chars] + "..."

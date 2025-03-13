@@ -4,7 +4,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 # Path to the folder with JSON files
-folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple_labeled/'
+folder_path = '/auto/brno2/home/javorek/T5_for_SLT/results/attention_batches_simple_labeled_tokens/'
 
 # Create a subfolder for saving average plots
 avg_plot_folder = os.path.join(folder_path, "average_plots_auto_crop_square")
@@ -13,7 +13,7 @@ os.makedirs(avg_plot_folder, exist_ok=True)
 # Threshold for deciding if a row/column is "non-zero" (helps with floating precision)
 NONZERO_THRESHOLD = 1e-9
 
-def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=100):
     """
     Creates a title with both the reference translation and prediction text, wrapping if too long.
     """
