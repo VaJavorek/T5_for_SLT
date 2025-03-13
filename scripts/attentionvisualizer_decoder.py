@@ -46,11 +46,13 @@ def crop_2d(matrix, bbox):
     min_r, max_r, min_c, max_c = bbox
     return matrix[min_r:max_r+1, min_c:max_c+1]
 
-def create_title_with_translation(filename, layer_info, translation, max_chars=50):
-    """Create a multi-line title including file, layer info, and truncated translation."""
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
+    """Create a multi-line title including file, layer info, reference and prediction."""
     if len(translation) > max_chars:
         translation = translation[:max_chars] + "..."
-    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    if len(prediction) > max_chars:
+        prediction = prediction[:max_chars] + "..."
+    title = f"File: {filename}\n{layer_info}\nReference: {translation}\nPrediction: {prediction}"
     return title
 
 def pad_row(row, target_length):
@@ -135,10 +137,10 @@ for filename in json_files:
     with open(json_file_path, 'r') as f:
         data = json.load(f)
     
-    # Extract decoder self-attentions and reference translation
-    # Expected structure: dec_attentions[step][layer][batch][head][query_len, key_len]
+    # Extract decoder self-attentions and translations
     dec_attentions = data['decoder_attentions']
     reference_translation = data['reference_translations'][0]
+    prediction = data['predictions'][0]
     
     num_steps = len(dec_attentions)
     num_layers = len(dec_attentions[0])
@@ -162,7 +164,8 @@ for filename in json_files:
         title = create_title_with_translation(
             filename,
             f"Decoder Self-Attention - Layer {layer_index+1} (Auto-Cropped)",
-            reference_translation
+            reference_translation,
+            prediction
         )
         fig.suptitle(title, fontsize=12, wrap=True)
         
@@ -200,7 +203,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Aggregated Decoder Self-Attention (Averaged Across Layers, Auto-Cropped)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     
@@ -237,7 +241,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Attention Distribution (Column Sums of Averaged Decoder Self-Attention)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     
@@ -282,7 +287,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Layer-wise Decoder Self-Attention (Averaged Across Heads, Auto-Cropped)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     
@@ -318,7 +324,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Layer-wise Attention Distribution (Column Sums of Layer-Averaged Decoder Self-Attention)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     

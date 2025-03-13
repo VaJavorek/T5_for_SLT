@@ -13,16 +13,18 @@ os.makedirs(avg_plot_folder, exist_ok=True)
 # Threshold for deciding if a row/column is "non-zero" (helps with floating precision)
 NONZERO_THRESHOLD = 1e-9
 
-def create_title_with_translation(filename, layer_info, translation, max_chars=50):
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
     """
-    Creates a title with the translation text, wrapping if too long.
+    Creates a title with both the reference translation and prediction text, wrapping if too long.
     """
-    # Truncate and add ellipsis if translation is too long
+    # Truncate and add ellipsis if texts are too long
     if len(translation) > max_chars:
         translation = translation[:max_chars] + "..."
+    if len(prediction) > max_chars:
+        prediction = prediction[:max_chars] + "..."
     
-    # Split title into two lines
-    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    # Create title with both translation and prediction
+    title = f"File: {filename}\n{layer_info}\nReference: {translation}\nPrediction: {prediction}"
     return title
 
 def find_global_bounding_box(matrices, threshold=NONZERO_THRESHOLD):
@@ -94,9 +96,10 @@ for filename in json_files:
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
-    # Retrieve encoder attentions and reference translation
+    # Retrieve encoder attentions and translations
     encoder_attentions = data['encoder_attentions']
     reference_translation = data['reference_translations'][0]
+    prediction = data['predictions'][0]
     num_layers = len(encoder_attentions)
 
     # We know batch size is 1, so batch_index = 0
@@ -144,11 +147,12 @@ for filename in json_files:
     fig, axes = plt.subplots(rows, cols, figsize=(12, 9))  # Increased height for title
     axes = axes.flatten()
 
-    # Main title with translation
+    # Main title with translations
     title = create_title_with_translation(
         filename,
         "Averaged Attention (Auto-Cropped Square), Batch 1",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
 

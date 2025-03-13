@@ -45,16 +45,18 @@ def crop_2d(matrix, bbox):
     min_r, max_r, min_c, max_c = bbox
     return matrix[min_r:max_r+1, min_c:max_c+1]
 
-def create_title_with_translation(filename, layer_info, translation, max_chars=50):
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
     """
-    Creates a title with the translation text, wrapping if too long.
+    Creates a title with both the reference translation and prediction text, wrapping if too long.
     """
-    # Truncate and add ellipsis if translation is too long
+    # Truncate and add ellipsis if texts are too long
     if len(translation) > max_chars:
         translation = translation[:max_chars] + "..."
+    if len(prediction) > max_chars:
+        prediction = prediction[:max_chars] + "..."
     
-    # Split title into two lines
-    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    # Create title with both translation and prediction
+    title = f"File: {filename}\n{layer_info}\nReference: {translation}\nPrediction: {prediction}"
     return title
 
 json_files = sorted([f for f in os.listdir(folder_path) if f.endswith('.json')])
@@ -71,6 +73,7 @@ for filename in json_files:
     
     # Get the reference translation (assuming one translation per file)
     reference_translation = data['reference_translations'][0]
+    prediction = data['predictions'][0]
     
     num_steps, num_layers, batch_size, num_heads, _, seq_len = cross_attentions.shape
     batch_index = 0  # always 0 if batch size is 1
@@ -83,7 +86,8 @@ for filename in json_files:
         title = create_title_with_translation(
             filename,
             f"Cross-Attention - Layer {layer_index+1} (Auto-Cropped)",
-            reference_translation
+            reference_translation,
+            prediction
         )
         fig.suptitle(title, fontsize=12, wrap=True)
 
@@ -136,7 +140,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Aggregated Cross-Attention (Averaged Across Layers, Auto-Cropped)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
 
@@ -176,7 +181,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Attention Distribution (Column Sums of Averaged Cross-Attention)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     
@@ -253,7 +259,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Layer-wise Cross-Attention (Averaged Across Heads, Auto-Cropped)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     
@@ -294,7 +301,8 @@ for filename in json_files:
     title = create_title_with_translation(
         filename,
         "Layer-wise Attention Distribution (Column Sums of Layer-Averaged Cross-Attention)",
-        reference_translation
+        reference_translation,
+        prediction
     )
     fig.suptitle(title, fontsize=12, wrap=True)
     

@@ -14,16 +14,18 @@ crop_size = 100
 plot_folder = os.path.join(folder_path, "plots")
 os.makedirs(plot_folder, exist_ok=True)
 
-def create_title_with_translation(filename, layer_info, translation, max_chars=50):
+def create_title_with_translation(filename, layer_info, translation, prediction, max_chars=50):
     """
-    Creates a title with the translation text, wrapping if too long.
+    Creates a title with both the reference translation and prediction text, wrapping if too long.
     """
-    # Truncate and add ellipsis if translation is too long
+    # Truncate and add ellipsis if texts are too long
     if len(translation) > max_chars:
         translation = translation[:max_chars] + "..."
+    if len(prediction) > max_chars:
+        prediction = prediction[:max_chars] + "..."
     
-    # Split title into two lines
-    title = f"File: {filename}\n{layer_info}\nTranslation: {translation}"
+    # Create title with both translation and prediction
+    title = f"File: {filename}\n{layer_info}\nReference: {translation}\nPrediction: {prediction}"
     return title
 
 # Grid dimensions: 3 rows, 4 columns for 12 heads
@@ -39,9 +41,10 @@ for filename in json_files:
     with open(json_file_path, 'r') as f:
         data = json.load(f)
 
-    # Retrieve encoder attentions and reference translation
+    # Retrieve encoder attentions and translations
     encoder_attentions = data['encoder_attentions']
     reference_translation = data['reference_translations'][0]
+    prediction = data['predictions'][0]
     num_layers = len(encoder_attentions)
     
     # Batch size is 1, so always use batch_index 0
@@ -53,11 +56,12 @@ for filename in json_files:
         fig, axes = plt.subplots(rows, cols, figsize=(12, 9))  # Increased height for title
         axes = axes.flatten()
 
-        # Main title indicating the file, layer, and translation
+        # Main title indicating the file, layer, and translations
         title = create_title_with_translation(
             filename,
             f"Encoder Layer {layer_index+1} - Batch Item {batch_index+1}",
-            reference_translation
+            reference_translation,
+            prediction
         )
         fig.suptitle(title, fontsize=12, wrap=True)
 
@@ -82,7 +86,7 @@ for filename in json_files:
             axes[head].set_title(f"Head {head+1}", fontsize=10)
             axes[head].axis('off')
 
-        # Remove any unused subplots if there are fewer than rows*cols heads
+        # Remove unused subplots if there are fewer than rows*cols heads
         for ax in axes[num_heads:]:
             ax.remove()
 
