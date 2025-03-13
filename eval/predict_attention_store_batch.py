@@ -148,13 +148,14 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
         log_file.write(log_line + "\n")
         log_file.flush()
 
-    def save_attention_batch(batch_idx, enc_attn, dec_attn, cross_attn, reference_translations, output_dir):
+    def save_attention_batch(batch_idx, enc_attn, dec_attn, cross_attn, reference_translations, predictions, output_dir):
         """Save attention data for current batch"""
         batch_data = {
             "encoder_attentions": enc_attn,
             "decoder_attentions": dec_attn,
             "cross_attentions": cross_attn,
-            "reference_translations": reference_translations
+            "reference_translations": reference_translations,
+            "predictions": predictions
         }
         os.makedirs(os.path.join(output_dir, "attention_batches"), exist_ok=True)
         with open(os.path.join(output_dir, "attention_batches", f"batch_{batch_idx}.json"), "w") as f:
@@ -225,8 +226,8 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
                 decoded_preds = tokenizer.batch_decode(sequences, skip_special_tokens=True)
                 decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
 
-                # Save attention weights for current batch with reference texts
-                save_attention_batch(step, enc_attn, dec_attn, cross_attn, decoded_labels, evaluation_config['output_dir'])
+                # Save attention weights for current batch with reference texts and predictions
+                save_attention_batch(step, enc_attn, dec_attn, cross_attn, decoded_labels, decoded_preds, evaluation_config['output_dir'])
 
                 # Clear variables to free memory
                 del enc_attn, dec_attn, cross_attn
