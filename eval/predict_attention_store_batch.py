@@ -150,12 +150,19 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
 
     def save_attention_batch(batch_idx, enc_attn, dec_attn, cross_attn, reference_translations, predictions, output_dir):
         """Save attention data for current batch"""
+        # Decode tokens for each sequence in the batch, skipping the first token
+        decoded_tokens = [
+            tokenizer.batch_decode(seq[1:], skip_special_tokens=True)  # Skip first token
+            for seq in sequences
+        ]
+        
         batch_data = {
             "encoder_attentions": enc_attn,
             "decoder_attentions": dec_attn,
             "cross_attentions": cross_attn,
             "reference_translations": reference_translations,
-            "predictions": predictions
+            "predictions": predictions,
+            "decoded_tokens": decoded_tokens  # Add decoded tokens to the output
         }
         os.makedirs(os.path.join(output_dir, "attention_batches"), exist_ok=True)
         with open(os.path.join(output_dir, "attention_batches", f"batch_{batch_idx}.json"), "w") as f:
