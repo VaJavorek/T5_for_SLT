@@ -177,7 +177,8 @@ for filename in json_files:
         avg_matrices.append(avg_matrix)
 
     # Now plot the averaged matrices
-    fig, axes = plt.subplots(3, 4, figsize=(15, 12))  # Increased size for labels
+    fig, axes = plt.subplots(3, 4, figsize=(20, 12))  # Wider figure for labels
+    plt.subplots_adjust(left=0.2)  # Add more space on the left for labels
     axes = axes.flatten()
     
     title = create_title_with_translation(
@@ -201,12 +202,16 @@ for filename in json_files:
             cropped_tokens = decoded_tokens[bbox[0]:bbox[1]+1]
             cropped_frames = frame_indices[bbox[2]:bbox[3]+1]
 
+        # Only show y-labels for the leftmost plots in each row
+        show_labels = (head % 4 == 0)
+        
         create_labeled_plot(
             cropped_matrix,
             axes[head],
             cropped_frames,
             cropped_tokens,
-            f"Head {head+1}"
+            f"Head {head+1}",
+            show_y_labels=show_labels
         )
 
     for ax in axes[num_heads:]:
@@ -334,12 +339,16 @@ for filename in json_files:
             cropped_tokens = decoded_tokens[bbox[0]:bbox[1]+1]
             cropped_frames = frame_indices[bbox[2]:bbox[3]+1]
             
+        # Only show y-labels for the leftmost plots in each row
+        show_labels = (layer_index % 4 == 0)
+        
         create_labeled_plot(
             cropped_matrix,
             axes[layer_index],
             cropped_frames,
             cropped_tokens,
-            f"Layer {layer_index+1}"
+            f"Layer {layer_index+1}",
+            show_y_labels=show_labels
         )
     
     # Remove unused subplots
