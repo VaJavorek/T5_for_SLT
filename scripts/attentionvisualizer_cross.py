@@ -102,6 +102,9 @@ for filename in json_files:
     # Get the decoded tokens (skip special tokens)
     decoded_tokens = data['decoded_tokens']
     
+    # Unwrap
+    decoded_tokens = decoded_tokens[0]
+    
     # Create frame indices for x-axis
     frame_indices = list(range(cross_attentions.shape[-1]))
     
