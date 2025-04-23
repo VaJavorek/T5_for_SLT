@@ -29,7 +29,7 @@ class SignFeatureDataset(Dataset):
         pose_dataset=None,
         float32=False,
         decimal_points=-1,
-        paraphrases=False,
+        paraphrase_mode: str = "none",   # "none" | "random" | "min_loss"
     ):
         """
 
@@ -51,7 +51,8 @@ class SignFeatureDataset(Dataset):
         self.pose_dataset = pose_dataset
         self.float32 = False if float32 in ["False", "false", False] else True
         self.decimal_points = int(decimal_points)
-        self.paraphrases = paraphrases
+        self.paraphrase_mode = paraphrase_mode if paraphrase_mode is not None else "none"
+        assert self.paraphrase_mode in {"none", "random", "min_loss"}, 'paraphrase mode must be in {"none", "random", "min_loss"}'
         data_dir = sign_data_args['data_dir']
 
         assert self.split in ['train', 'dev', 'test'], 'split must be in ["train", "dev", "test"]'
@@ -139,13 +140,14 @@ class SignFeatureDataset(Dataset):
                     visual_features[input_type] = None
 
         clip_dict = self.annotation[video_id][clip_name]
-        if self.paraphrases:
-            translation = random.choice(clip_dict['paraphrases'] + [clip_dict['translation']])
-        else:
-            translation = clip_dict['translation']
-
-        decoded = self.tokenizer(
-            translation,
+        if self.paraphrase_mode == "min_loss":
+            targets = clip_dict["paraphrases"] + [clip_dict["translation"]]
+        elif self.paraphrase_mode == "random":
+            targets = [random.choice(clip_dict["paraphrases"] + [clip_dict["translation"]])]
+        else:                 # "none"
+            targets = [clip_dict["translation"]]
+        decoded = self.tokenizer(          # accepts list[str] → BatchEncoding :contentReference[oaicite:3]{index=3}
+            targets,
             max_length=self.max_token_length,
             padding="max_length",
             truncation=True,
@@ -179,7 +181,7 @@ class SignFeatureDataset(Dataset):
                             'mae': visual_features['mae'],
                             'dino': visual_features['dino'],
                             'sign2vec': visual_features['sign2vec']},
-            "sentence": translation,
+            "sentence": clip_dict["translation"],
             "labels": labels,
             "attention_mask": attention_mask,
         }

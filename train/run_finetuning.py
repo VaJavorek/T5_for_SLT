@@ -3,6 +3,7 @@ import math
 import json
 import wandb
 import torch
+import torch.nn.functional as F
 import evaluate
 import numpy as np
 from transformers import (
@@ -16,6 +17,7 @@ from utils.translation import postprocess_text
 from utils.keypoint_dataset import KeypointDatasetJSON
 from utils.augmentation_config import get_augmentations
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
+from train.min_loss_trainer import MinLossSeq2SeqTrainer
 
 from dotenv import load_dotenv
 load_dotenv()
@@ -265,11 +267,19 @@ if __name__ == "__main__":
         ])
 
         # Process labels
+        max_p = max(sample["labels"].shape[0] for sample in batch)           # P
+        max_l = max(sample["labels"].shape[1] for sample in batch)           # L
+
         labels = torch.stack([
-            torch.cat((sample["labels"].squeeze(0), torch.zeros(max_token_len - sample["labels"].shape[0])), dim=0)
-            if sample["labels"].shape[0] < max_token_len else sample["labels"]
+            F.pad(sample["labels"],                                        # [P, L]
+                pad=(0, max_l - sample["labels"].shape[1],               # tokens
+                    0, max_p - sample["labels"].shape[0]),              # paraphrases
+                value=tokenizer.pad_token_id)                            # T5 pad id = 0 :contentReference[oaicite:2]{index=2}
             for sample in batch
-        ]).squeeze(0).to(torch.long)
+        ]).to(torch.long)                                                  # [B, P, L]
+        
+        if labels.size(1) == 1:          # collapse when only 1 paraphrase
+            labels = labels.squeeze(1)   # -> [B, L]
 
         return {
             "sign_inputs": torch.cat(sign_inputs, dim=-1),
@@ -327,7 +337,7 @@ if __name__ == "__main__":
                                 pose_dataset=train_pose_dataset,
                                 float32=training_config['float32'],
                                 decimal_points=training_config['decimal_points'],
-                                paraphrases=training_config['use_paraphrases'],
+                                paraphrase_mode=training_config['paraphrase_mode'],
                                 )
 
     val_dataset = DatasetForSLT(tokenizer= tokenizer,
@@ -340,7 +350,7 @@ if __name__ == "__main__":
                                 pose_dataset=val_pose_dataset,
                                 float32=training_config['float32'],
                                 decimal_points=training_config['decimal_points'],
-                                paraphrases=False,
+                                paraphrase_mode="none",
                                 )
 
     if args.verbose:
@@ -362,6 +372,8 @@ if __name__ == "__main__":
     sacrebleu = evaluate.load('sacrebleu')
 
     def compute_metrics(eval_preds):
+        if labels.ndim == 3:          # [B, P, L]
+            labels = labels[:, 0, :]  # keep the canonical translation
         preds, labels = eval_preds
 
         if isinstance(preds, tuple):
@@ -446,7 +458,9 @@ if __name__ == "__main__":
     if os.environ.get("LOCAL_RANK", "0") == "0" and training_config['report_to'] == 'wandb': # TODO: remove redundant data
         wandb.config.update(vars(training_args))
 
-    trainer = Seq2SeqTrainer(
+    TrainerClass = MinLossSeq2SeqTrainer if training_config["paraphrase_mode"] == "min_loss" else Seq2SeqTrainer
+
+    trainer = TrainerClass(
         model=model,
         args=training_args,
         train_dataset=train_dataset,

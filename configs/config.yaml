@@ -1,5 +1,5 @@
 ModelArguments:
-  base_model_name: t5-small
+  base_model_name: google/t5-v1_1-base
   hidden_dropout_prob: 0.0
   num_beams: 4
   max_length: 128
@@ -46,7 +46,7 @@ TrainingArguments:
   float32: False
   decimal_points: -1
   load_from_raw: False
-  use_paraphrases: False
+  paraphrase_mode: min_loss # none | random | min_loss
 #  Evaluation
   num_beams: 5
   early_stopping: False
