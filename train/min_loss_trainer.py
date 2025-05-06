@@ -20,7 +20,8 @@ class MinLossSeq2SeqTrainer(Seq2SeqTrainer):
         flat_labels = labels.reshape(B * P, L)     # [B*P, L]
 
         # repeat encoder inputs P times along batch dim
-        enc_inputs = {k: v.repeat_interleave(P, dim=0) for k, v in inputs.items()} # differentiable repeat
+        # enc_inputs = {k: v.repeat_interleave(P, dim=0) for k, v in inputs.items()} # differentiable repeat
+        enc_inputs = {k: v.unsqueeze(1).expand(-1, P, *v.shape[1:]).reshape(B*P, *v.shape[1:]) for k, v in inputs.items()} # new version using expand() saves mem
 
         outputs = model(**enc_inputs, labels=flat_labels, return_dict=True)  # one forward pass to obtain logits
         logits = outputs.logits                     # [B*P, L, V]
