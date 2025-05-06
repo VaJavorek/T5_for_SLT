@@ -372,9 +372,9 @@ if __name__ == "__main__":
     sacrebleu = evaluate.load('sacrebleu')
 
     def compute_metrics(eval_preds):
+        preds, labels = eval_preds
         if labels.ndim == 3:          # [B, P, L]
             labels = labels[:, 0, :]  # keep the canonical translation
-        preds, labels = eval_preds
 
         if isinstance(preds, tuple):
             preds = preds[0]
