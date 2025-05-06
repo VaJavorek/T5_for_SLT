@@ -9,6 +9,8 @@ class MinLossSeq2SeqTrainer(Seq2SeqTrainer):
     """
 
     def compute_loss(self, model, inputs, return_outputs=False):
+        if not hasattr(self, "orig_hits"):
+            self.orig_hits, self.para_hits = 0, 0
         labels = inputs.pop("labels")          # shape [B, P, L]  (or [B, L])
         # fallback to vanilla path when P == 1
         if labels.ndim == 2:                   # [B, L]
@@ -38,7 +40,26 @@ class MinLossSeq2SeqTrainer(Seq2SeqTrainer):
         seq_loss = (token_loss * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1)  # [B*P]
         
         loss_per_p = seq_loss.view(B, P)            # [B, P]
-        min_loss = loss_per_p.min(dim=1).values     # [B]
+        min_loss, min_idx = loss_per_p.min(dim=1)     # [B]
+        
+        self.para_hits += (min_idx != (P - 1)).sum().item()
+        self.orig_hits += (min_idx == (P - 1)).sum().item()
+        
+        if self.state.global_step % self.args.logging_steps == 0 and self.state.global_step:
+            total = self.orig_hits + self.para_hits
+            if total:
+                self.log({"para_hit_ratio": self.para_hits / total})
 
         loss = min_loss.mean()                      # scalar
         return (loss, outputs) if return_outputs else loss
+
+    def on_train_end(self):
+        if hasattr(self, "orig_hits"):
+            total = self.orig_hits + self.para_hits
+            if total:
+                self.log({
+                    "final_para_hits": self.para_hits,
+                    "final_orig_hits": self.orig_hits,
+                    "final_para_ratio": self.para_hits / total,
+                })
+        super().on_train_end()
