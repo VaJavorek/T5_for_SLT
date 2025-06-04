@@ -323,6 +323,10 @@ if __name__ == "__main__":
             'bleu-3': result['precisions'][2],
             'bleu-4': result['precisions'][3],
         }
+        wer_metric = evaluate.load("wer")
+        wer_score = wer_metric.compute(predictions=decoded_preds, references=decoded_labels)
+        print(f"Word Error Rate: {wer_score}")
+        result["wer"] = wer_score
 
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
