@@ -62,7 +62,7 @@ class SignFeatureDataset(Dataset):
         elif self.split == "test":
             annotation_path = sign_data_args['annotation_path']['test']
         annotation_path = os.path.join(data_dir, annotation_path)
-        with open(annotation_path, "r") as f:
+        with open(annotation_path, "r", encoding="utf-8") as f:
             self.annotation = json.load(f)
 
         self.list_data = []  # [(video_id, clip_id), ...]
