@@ -53,7 +53,7 @@ class SignFeatureDataset(Dataset):
         elif self.split == "test":
             annotation_path = sign_data_args['annotation_path']['test']
         annotation_path = os.path.join(data_dir, annotation_path)
-        with open(annotation_path, "r") as f:
+        with open(annotation_path, "r", encoding="utf-8") as f:
             self.annotation = json.load(f)
 
         self.list_data = []  # [(video_id, clip_id), ...]
@@ -165,7 +165,7 @@ class SignFeatureDataset(Dataset):
     def read_multih5_json(self, data_dir, json_filename, input_type):
         """Helper function for reading json specifications of multiple H5 files for visual features"""
         h5_video_clip = set()
-        with open(os.path.join(data_dir, json_filename), 'r') as F:
+        with open(os.path.join(data_dir, json_filename), 'r', encoding="utf-8") as F:
             self.h5shard[self.split][input_type] = json.load(F)
             self.h5_data[input_type] = {}
             print(f"{input_type}: {self.split} data is loaded from: ")

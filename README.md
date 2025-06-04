@@ -72,7 +72,7 @@ export PYTHONPATH=$PYTHONPATH:$(pwd)
 python train/run_finetuning.py --config_file configs/config.yaml
 
 # Run predict script
-python eval/predict.py --config_file configs/config.yaml
+python eval/predict_attention_store_batch.py --config_file configs/predict_config_attention_isharah.yaml
 ```
 Use ```--verbose``` for extended output.
 
