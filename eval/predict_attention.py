@@ -312,12 +312,17 @@ def main():
         }
         
         wer_metric = evaluate.load("wer")
+        # Flatten references for WER and handle potential empty references
         flat_labels = [lab[0] if isinstance(lab, (list, tuple)) else lab for lab in decoded_labels]
-        wer_score = wer_metric.compute(predictions=decoded_preds, references=flat_labels)
+        try:
+            wer_score = wer_metric.compute(predictions=decoded_preds, references=flat_labels)
+        except ValueError as e:
+            log_message(f"WER computation failed: {e}", log_file)
+            wer_score = None
         print(f"Word Error Rate: {wer_score}")
         result["wer"] = wer_score
 
-        result = {k: round(v, 4) for k, v in result.items()}
+        result = {k: round(v, 4) if isinstance(v, (int, float)) else v for k, v in result.items()}
 
         if args.verbose:
             for key, value in result.items():
