@@ -88,7 +88,8 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume_from_checkpoint", type=str, default=None)
-    parser.add_argument("--load_only_weights", type=bool, default=None)
+    parser.add_argument("--load_only_weights", type=str, default=None)
+    parser.add_argument("--freeze_t5", type=str, default=None)
 
     # Logging and saving
     parser.add_argument("--report_to", type=str, default=None)
@@ -167,6 +168,8 @@ def update_config(cfg, args):
     """
     for k, v in vars(args).items():
         if k in cfg['TrainingArguments'] and v is not None:
+            v = False if v in ['false', 'False'] else v
+            v = True if v in ['true', 'True'] else v
             cfg['TrainingArguments'][k] = v
             if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
                 print('Config value updated by args - {}: {}'.format(k, v))
@@ -221,6 +224,18 @@ if __name__ == "__main__":
     else:
         model = T5ModelForSLT(config=t5_config)
     for param in model.parameters(): param.data = param.data.contiguous()
+
+    # Freeze all parameters in the base T5 model
+    if training_config['freeze_t5']:
+        for param in model.model.parameters():
+            param.requires_grad = False
+    if args.verbose:
+        print("Trainable parameters:")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(name, param.shape)
+
+
     tokenizer = T5Tokenizer.from_pretrained(model.config.base_model_name, clean_up_tokenization_spaces=True)
 
     if os.environ.get("LOCAL_RANK", "0") == "0" and training_config['report_to'] == 'wandb': # TODO: remove redundant data

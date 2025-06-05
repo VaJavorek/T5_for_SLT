@@ -20,6 +20,7 @@ TrainingArguments:
   seed: 42
   resume_from_checkpoint: none
   load_only_weights: False
+  freeze_t5: False
 #  Logging and saving
   report_to: wandb
   logging_steps: 1
