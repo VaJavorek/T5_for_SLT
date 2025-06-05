@@ -324,7 +324,8 @@ if __name__ == "__main__":
             'bleu-4': result['precisions'][3],
         }
         wer_metric = evaluate.load("wer")
-        wer_score = wer_metric.compute(predictions=decoded_preds, references=decoded_labels)
+        flat_labels = [lab[0] if isinstance(lab, (list, tuple)) else lab for lab in decoded_labels]
+        wer_score = wer_metric.compute(predictions=decoded_preds, references=flat_labels)
         print(f"Word Error Rate: {wer_score}")
         result["wer"] = wer_score
 
