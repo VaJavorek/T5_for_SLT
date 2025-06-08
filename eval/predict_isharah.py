@@ -15,8 +15,11 @@ from utils.translation import postprocess_text
 import evaluate
 import yaml
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
+import csv
 
 os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
+# set KMP_DUPLICATE_LIB_OK=TRUE
+
 load_dotenv()
 
 def parse_args():
@@ -307,8 +310,19 @@ def main():
             'bleu-3': result['precisions'][2],
             'bleu-4': result['precisions'][3],
         }
+        
+        wer_metric = evaluate.load("wer")
+        # Flatten references for WER and handle potential empty references
+        flat_labels = [lab[0] if isinstance(lab, (list, tuple)) else lab for lab in decoded_labels]
+        try:
+            wer_score = wer_metric.compute(predictions=decoded_preds, references=flat_labels)
+        except ValueError as e:
+            log_message(f"WER computation failed: {e}", log_file)
+            wer_score = None
+        print(f"Word Error Rate: {wer_score}")
+        result["wer"] = wer_score
 
-        result = {k: round(v, 4) for k, v in result.items()}
+        result = {k: round(v, 4) if isinstance(v, (int, float)) else v for k, v in result.items()}
 
         if args.verbose:
             for key, value in result.items():
@@ -331,6 +345,14 @@ def main():
             json.dump(all_predictions, f, ensure_ascii=False, indent=4)
 
         log_message(f"Predictions saved to {prediction_file}", log_file)
+        # Save submission CSV file
+        csv_file = os.path.join(evaluation_config['output_dir'], f"{os.path.splitext(os.path.basename(config['SignDataArguments']['annotation_path'][evaluation_config['split']]))[0].split('.')[-1]}.csv")
+        with open(csv_file, "w", encoding="utf-8", newline="") as csvf:
+            writer = csv.writer(csvf)
+            writer.writerow(["id", "gloss"])
+            ids = [dataset.clip_order_from_int[vid][cid] for vid, cid in dataset.list_data]
+            writer.writerows(zip(ids, decoded_preds))
+        log_message(f"Submission CSV saved to {csv_file}", log_file)
         log_message("Script completed", log_file)
 
 if __name__ == "__main__":
