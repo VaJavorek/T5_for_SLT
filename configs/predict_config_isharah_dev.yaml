@@ -14,15 +14,18 @@ ModelArguments:
   do_sample: True
 
 EvaluationArguments:
-  output_dir: ./results
+  output_dir: ./results/0001last
   model_name: T5_YTASL_pretrain
   skip_frames: False
 #  Data processing
   split: test
   max_sequence_length: 250
   max_token_length: 128
+  float32: False
+  decimal_points: -1
+  load_from_raw: False
 #  Generation parameters
-  model_dir: ./checkpoints/checkpoint-2460/model.safetensors
+  model_dir: /auto/plzen4-ntis/projects/korpusy_cv/Isharah1000/backup_checkpoints/0001-train_Isharah1000_mt5-base/checkpoint-12469/model.safetensors
   batch_size: 5
 #  Debugging
   max_val_samples: none

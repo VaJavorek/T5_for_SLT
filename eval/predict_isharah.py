@@ -340,8 +340,8 @@ def main():
         all_predictions = {'metrics': result, 'predictions': all_predictions[:100]}
 
         os.makedirs(evaluation_config['output_dir'], exist_ok=True)
-        prediction_file = os.path.join(evaluation_config['output_dir'], "predictions.json")
-        with open(prediction_file, "w") as f:
+        prediction_file = os.path.join(evaluation_config['output_dir'], f"predictions_{os.path.splitext(os.path.basename(config['SignDataArguments']['annotation_path'][evaluation_config['split']]))[0].split('.')[-1]}.json")
+        with open(prediction_file, "w", encoding="utf-8") as f:
             json.dump(all_predictions, f, ensure_ascii=False, indent=4)
 
         log_message(f"Predictions saved to {prediction_file}", log_file)
