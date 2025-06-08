@@ -19,10 +19,15 @@ class T5ModelForSLT(PreTrainedModel):
         # Define a custom linear layer to apply to the input embeddings
         self.model = AutoModelForSeq2SeqLM.from_pretrained(config.base_model_name)
         self.custom_linear = nn.Sequential(
-            nn.Linear(config.sign_input_dim, self.model.config.d_model),
+            nn.Linear(config.sign_input_dim, self.model.config.d_model, bias=False),
             nn.Dropout(config.hidden_dropout_prob),
             nn.GELU(),
         )
+
+        # Initialize weights
+        for layer in self.custom_linear:
+            if isinstance(layer, nn.Linear):
+                nn.init.xavier_uniform_(layer.weight)  # Xavier init (matches T5 embeddings)
 
         self.model.generation_config = GenerationConfig(
             max_length=config.max_length,

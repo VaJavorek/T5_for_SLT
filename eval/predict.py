@@ -10,8 +10,10 @@ from transformers import T5Config
 from model.modeling_t5 import T5ModelForSLT
 from utils.translation import postprocess_text
 import evaluate
+from sacrebleu.metrics import BLEU
 import yaml
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
+from utils.keypoint_dataset import KeypointDatasetJSON
 
 load_dotenv()
 
@@ -84,25 +86,25 @@ def update_config(cfg, args):
                 print('Config value updated by args - {}: {}'.format(k, v))
     return cfg
 
-def collate_fn(batch, max_sequence_length, max_token_length, pose_dim):
-    return {
-        "sign_inputs": torch.stack([
-            torch.cat((sample["sign_inputs"], torch.zeros(max_sequence_length - sample["sign_inputs"].shape[0], pose_dim)), dim=0)
-            for sample in batch
-        ]),
-        "attention_mask": torch.stack([
-            torch.cat((sample["attention_mask"], torch.zeros(max_sequence_length - sample["attention_mask"].shape[0])), dim=0)
-            if sample["attention_mask"].shape[0] < max_sequence_length
-            else sample["attention_mask"]
-            for sample in batch
-        ]),
-        "labels": torch.stack([
-            torch.cat((sample["labels"].squeeze(0), torch.zeros(max_token_length - sample["labels"].shape[0])), dim=0)
-            if sample["labels"].shape[0] < max_token_length
-            else sample["labels"]
-            for sample in batch
-        ]).squeeze(0).to(torch.long),
-    }
+# def collate_fn(batch, max_sequence_length, max_token_length, pose_dim):
+#     return {
+#         "sign_inputs": torch.stack([
+#             torch.cat((sample["sign_inputs"], torch.zeros(max_sequence_length - sample["sign_inputs"].shape[0], pose_dim)), dim=0)
+#             for sample in batch
+#         ]),
+#         "attention_mask": torch.stack([
+#             torch.cat((sample["attention_mask"], torch.zeros(max_sequence_length - sample["attention_mask"].shape[0])), dim=0)
+#             if sample["attention_mask"].shape[0] < max_sequence_length
+#             else sample["attention_mask"]
+#             for sample in batch
+#         ]),
+#         "labels": torch.stack([
+#             torch.cat((sample["labels"].squeeze(0), torch.zeros(max_token_length - sample["labels"].shape[0])), dim=0)
+#             if sample["labels"].shape[0] < max_token_length
+#             else sample["labels"]
+#             for sample in batch
+#         ]).squeeze(0).to(torch.long),
+#     }
 
 def evaluate_model(model, dataloader, tokenizer, evaluation_config):
     model.eval()
@@ -165,7 +167,79 @@ def main():
     for param in model.parameters(): param.data = param.data.contiguous()
     tokenizer = T5Tokenizer.from_pretrained(model.config.base_model_name, clean_up_tokenization_spaces=True)
 
+    # Add collate_fn to DataLoader
+    def collate_fn(batch):
+        # Add padding to the inputs
+        # YT-ASL paper:
+            # "inputs" must be 250 frames long
+            # "attention_mask" must be 250 frames long
+            # "labels" must be 128 tokens long
+        max_seq_len = evaluation_config['max_sequence_length']
+        max_token_len = evaluation_config['max_token_length']
+
+        # List of enabled modalities (based on config)
+        modalities = [
+            mod for mod in config['SignDataArguments']['visual_features']
+            if config['SignDataArguments']['visual_features'][mod]['enable_input']
+        ]
+        # Get the dimensionality for enabled modalities
+        modality_dim = {
+            mod: config['SignModelArguments']['projectors'][mod]['dim']
+            for mod in modalities
+        }
+
+        # Process each enabled modality
+        sign_inputs = [
+            torch.stack([
+                torch.cat((sample["sign_inputs"][mod],
+                           torch.zeros(max_seq_len - sample["sign_inputs"][mod].shape[0], modality_dim[mod])), dim=0)
+                for sample in batch
+            ])
+            for mod in modalities
+        ]
+
+        # Process attention mask
+        attention_mask = torch.stack([
+            torch.cat((sample["attention_mask"], torch.zeros(max_seq_len - sample["attention_mask"].shape[0])), dim=0)
+            if sample["attention_mask"].shape[0] < max_seq_len else sample["attention_mask"]
+            for sample in batch
+        ])
+
+        # Process labels
+        labels = torch.stack([
+            torch.cat((sample["labels"].squeeze(0), torch.zeros(max_token_len - sample["labels"].shape[0])), dim=0)
+            if sample["labels"].shape[0] < max_token_len else sample["labels"]
+            for sample in batch
+        ]).squeeze(0).to(torch.long)
+
+        return {
+            "sign_inputs": torch.cat(sign_inputs, dim=-1),
+            "attention_mask": attention_mask,
+            "labels": labels
+        }
     # Prepare dataset
+    pose_config = config['SignDataArguments']['visual_features']['pose']
+    test_raw_pose_data_path = pose_config['normalization']['test_json_dir']
+
+    if os.path.isdir(test_raw_pose_data_path):
+        test_pose_dataset = KeypointDatasetJSON(json_folder=test_raw_pose_data_path,
+                                           kp_normalization=(
+                                               "global-pose_landmarks",
+                                               "local-right_hand_landmarks",
+                                               "local-left_hand_landmarks",
+                                               "local-face_landmarks",),
+                                           kp_normalization_method=pose_config['normalization']['normalization_method'],
+                                           data_key=pose_config['normalization']['data_key'],
+                                           missing_values=pose_config['missing_values'],
+                                           augmentation_configs=[],
+                                           load_from_raw=evaluation_config['load_from_raw'],
+                                           interpolate=pose_config['interpolate'],
+                                           )
+        print('Train raw pose data path: {}'.format(test_raw_pose_data_path))
+    else:
+        test_pose_dataset = None
+        print('Raw poses not found in {}'.format(test_raw_pose_data_path))
+
     dataset = DatasetForSLT(tokenizer= tokenizer,
                                 sign_data_args=config['SignDataArguments'],
                                 split=evaluation_config['split'],
@@ -173,22 +247,27 @@ def main():
                                 max_token_length=evaluation_config['max_token_length'],
                                 max_sequence_length=evaluation_config['max_sequence_length'],
                                 max_samples=evaluation_config['max_val_samples'],
+                                pose_dataset=test_pose_dataset,
+                                float32=evaluation_config['float32'],
+                                decimal_points=evaluation_config['decimal_points'],
                                 )
 
     dataloader = torch.utils.data.DataLoader(
         dataset,
         batch_size=evaluation_config['batch_size'],
-        collate_fn=lambda batch: collate_fn(
-            batch,
-            max_sequence_length=evaluation_config['max_sequence_length'],
-            max_token_length=evaluation_config['max_token_length'],
-            pose_dim=config['SignModelArguments']['projectors']['pose']['dim'],
-        ),
+        collate_fn=collate_fn,
+        # collate_fn=lambda batch: collate_fn(
+        #     batch,
+        #     max_sequence_length=evaluation_config['max_sequence_length'],
+        #     max_token_length=evaluation_config['max_token_length'],
+        #     pose_dim=config['SignModelArguments']['projectors']['pose']['dim'],
+        # ),
     )
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model.to(device)
 
+    print("Evaluating...")
     predictions, labels = evaluate_model(model, dataloader, tokenizer, evaluation_config)
 
     # Postprocess predictions and references
@@ -201,14 +280,20 @@ def main():
             print("-" * 50)
 
     # Compute metrics
-    sacrebleu = evaluate.load('sacrebleu')
-    result = sacrebleu.compute(predictions=decoded_preds, references=decoded_labels)
+    decoded_labels = [list(x) for x in zip(*decoded_labels)]
+    bleu1 = BLEU(max_ngram_order=1).corpus_score(decoded_preds,  decoded_labels)
+    bleu2 = BLEU(max_ngram_order=2).corpus_score(decoded_preds,  decoded_labels)
+    bleu3 = BLEU(max_ngram_order=3).corpus_score(decoded_preds,  decoded_labels)
+    bleu4 = BLEU(max_ngram_order=4).corpus_score(decoded_preds,  decoded_labels)
     result = {
-        "bleu": result["score"],
-        'bleu-1': result['precisions'][0],
-        'bleu-2': result['precisions'][1],
-        'bleu-3': result['precisions'][2],
-        'bleu-4': result['precisions'][3],
+        "bleu-1": bleu1.score,
+        "bleu-2": bleu2.score,
+        "bleu-3": bleu3.score,
+        "bleu-4": bleu4.score,
+        "bleu-1_precision": bleu4.precisions[0],
+        "bleu-2_precision": bleu4.precisions[1],
+        "bleu-3_precision": bleu4.precisions[2],
+        "bleu-4_precision": bleu4.precisions[3],
     }
 
     result = {k: round(v, 4) for k, v in result.items()}
@@ -223,7 +308,7 @@ def main():
             "prediction": pred,
             "reference": ref
         }
-        for pred, ref in zip(decoded_preds, decoded_labels)
+        for pred, ref in zip(decoded_preds, decoded_labels[0])
     ]
     all_predictions = {'metrics': result, 'predictions': all_predictions[:100]}
 

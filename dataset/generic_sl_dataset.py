@@ -3,6 +3,7 @@ from typing import Dict
 import h5py
 import json
 import numpy as np
+import random
 
 import torch
 from torch.utils.data import Dataset
@@ -25,6 +26,10 @@ class SignFeatureDataset(Dataset):
         max_token_length=None,
         max_sequence_length=None,
         max_samples=None,
+        pose_dataset=None,
+        float32=False,
+        decimal_points=-1,
+        paraphrases=False,
     ):
         """
 
@@ -43,6 +48,10 @@ class SignFeatureDataset(Dataset):
         self.tokenizer = tokenizer
         self.split = split
         self.max_samples = max_samples
+        self.pose_dataset = pose_dataset
+        self.float32 = False if float32 in ["False", "false", False] else True
+        self.decimal_points = int(decimal_points)
+        self.paraphrases = paraphrases
         data_dir = sign_data_args['data_dir']
 
         assert self.split in ['train', 'dev', 'test'], 'split must be in ["train", "dev", "test"]'
@@ -112,15 +121,28 @@ class SignFeatureDataset(Dataset):
         # Get the visual features
         visual_features = {}
         for input_type in INPUT_TYPES:
-            if self.h5_data[input_type] is not None:
-                shard = self.h5shard[self.split][input_type][video_id]
-                vf = torch.tensor(np.array(self.h5_data[input_type][shard][video_id][clip_name]))
-
-                visual_features[input_type] = vf
+            if input_type == 'pose' and self.pose_dataset is not None:
+                    clip_data = self.pose_dataset.get_clip_data(clip_name)
+                    if not self.float32:
+                        clip_data = clip_data.astype(np.dtype('float16'))
+                    if self.decimal_points > 0:
+                        clip_data = np.round(clip_data, self.decimal_points)
+                    vf = torch.tensor(clip_data).float()
+                    visual_features[input_type] = vf
             else:
-                visual_features[input_type] = None
+                if self.h5_data[input_type] is not None:
+                    shard = self.h5shard[self.split][input_type][video_id]
+                    vf = torch.tensor(np.array(self.h5_data[input_type][shard][video_id][clip_name]))
 
-        translation = self.annotation[video_id][clip_name]['translation']
+                    visual_features[input_type] = vf
+                else:
+                    visual_features[input_type] = None
+
+        clip_dict = self.annotation[video_id][clip_name]
+        if self.paraphrases:
+            translation = random.choice(clip_dict['paraphrases'] + [clip_dict['translation']])
+        else:
+            translation = clip_dict['translation']
 
         decoded = self.tokenizer(
             translation,

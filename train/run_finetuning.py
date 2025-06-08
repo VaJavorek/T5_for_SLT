@@ -13,6 +13,8 @@ from transformers import (
 from model.configuration_t5 import SignT5Config
 from model.modeling_t5 import T5ModelForSLT
 from utils.translation import postprocess_text
+from utils.keypoint_dataset import KeypointDatasetJSON
+from utils.augmentation_config import get_augmentations
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
 
 from dotenv import load_dotenv
@@ -20,21 +22,33 @@ load_dotenv()
 from tqdm import tqdm
 import yaml
 import argparse
+import random
 
 def init_wandb(config, wandb_api_key=None):
     if wandb_api_key:
         if os.path.exists(wandb_api_key):
-            with open(wandb_api_key, "r") as f:
-                os.environ["WANDB_API_KEY"] = f.read().strip()
+            with open(wandb_api_key, 'r') as f:
+                os.environ['WANDB_API_KEY'] = f.read().strip()
         else:
-            os.environ["WANDB_API_KEY"] = wandb_api_key
+            os.environ['WANDB_API_KEY'] = wandb_api_key
 
     wandb.login(
-        key=os.getenv("WANDB_API_KEY")
+        key=os.getenv('WANDB_API_KEY')
     )
+
+    if 'WANDB_PROJECT' in os.environ.keys():
+        project_name = os.environ['WANDB_PROJECT']
+        print('Setting up wandb project name from environment variables: {}'.format(project_name))
+    elif 'project_name' in config['TrainingArguments']:
+        project_name = config['TrainingArguments']['project_name']
+        print('Setting up wandb project name from config: {}'.format(project_name))
+    else:
+        project_name = None
+        print('Wandb project name not found in environment variables or config. Setting to None.')
+
     wandb.init(
-        project=config['TrainingArguments']["project_name"],
-        tags=[config["ModelArguments"]["base_model_name"]],
+        project=project_name,
+        tags=[config['ModelArguments']['base_model_name']],
         config=config,
     )
     wandb.run.name = '{}-{}'.format(wandb.run.name, config['TrainingArguments']['model_name'])
@@ -46,11 +60,12 @@ def init_wandb(config, wandb_api_key=None):
 
 
 def set_seed(seed_value=42):
-    # random.seed(seed_value)  # Python random
+    random.seed(seed_value)  # Python random
     np.random.seed(seed_value)  # NumPy random
     torch.manual_seed(seed_value)  # PyTorch (CPU & CUDA)
     torch.cuda.manual_seed(seed_value)  # GPU-specific seed
     torch.cuda.manual_seed_all(seed_value)  # Multi-GPU safe
+    torch.backends.cudnn.deterministic = True
 
 
 def parse_args():
@@ -73,7 +88,8 @@ def parse_args():
     parser.add_argument("--output_dir", type=str, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--resume_from_checkpoint", type=str, default=None)
-    parser.add_argument("--load_only_weights", type=bool, default=None)
+    parser.add_argument("--load_only_weights", type=str, default=None)
+    parser.add_argument("--freeze_t5", type=str, default=None)
 
     # Logging and saving
     parser.add_argument("--report_to", type=str, default=None)
@@ -93,6 +109,7 @@ def parse_args():
     parser.add_argument("--learning_rate", type=float, default=None)
     parser.add_argument("--lr_scheduler_type", type=str, default=None)
     parser.add_argument("--max_training_steps", type=int, default=None)
+    parser.add_argument("--warmup_steps", type=int, default=None)
     parser.add_argument("--weight_decay", type=float, default=None)
     parser.add_argument("--fp16", type=bool, default=None)
 
@@ -100,6 +117,9 @@ def parse_args():
     parser.add_argument("--max_sequence_length", type=int, default=None)
     parser.add_argument("--max_token_length", type=int, default=None)
     parser.add_argument("--skip_frames", default=None)
+    parser.add_argument("--float32", default=None)
+    parser.add_argument("--decimal_points", default=None)
+    parser.add_argument("--load_from_raw", default=None)
 
     # Evaluation arguments
     parser.add_argument("--num_beams", type=int, default=None)
@@ -148,6 +168,8 @@ def update_config(cfg, args):
     """
     for k, v in vars(args).items():
         if k in cfg['TrainingArguments'] and v is not None:
+            v = False if v in ['false', 'False'] else v
+            v = True if v in ['true', 'True'] else v
             cfg['TrainingArguments'][k] = v
             if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
                 print('Config value updated by args - {}: {}'.format(k, v))
@@ -165,13 +187,15 @@ def get_sign_input_dim(config):
 if __name__ == "__main__":
     args = parse_args()
     if os.environ.get("LOCAL_RANK", "0") == "0" and args.verbose:
-        print('Loading config...')
+        print('Loading config from {}...'.format(args.config_file))
     config = load_config(args.config_file)
     config = update_config(config, args)
 
     training_config = config['TrainingArguments']
     model_config = config['ModelArguments']
     model_config['sign_input_dim'] = get_sign_input_dim(config)
+    if training_config['warmup_steps'] > 0 and 'warmup' not in training_config['lr_scheduler_type']:
+        print('Warmup steps are set by config but lr_scheduler_type does not support it.')
 
     set_seed(training_config['seed'])
 
@@ -200,6 +224,18 @@ if __name__ == "__main__":
     else:
         model = T5ModelForSLT(config=t5_config)
     for param in model.parameters(): param.data = param.data.contiguous()
+
+    # Freeze all parameters in the base T5 model
+    if training_config['freeze_t5']:
+        for param in model.model.parameters():
+            param.requires_grad = False
+    if args.verbose:
+        print("Trainable parameters:")
+        for name, param in model.named_parameters():
+            if param.requires_grad:
+                print(name, param.shape)
+
+
     tokenizer = T5Tokenizer.from_pretrained(model.config.base_model_name, clean_up_tokenization_spaces=True)
 
     if os.environ.get("LOCAL_RANK", "0") == "0" and training_config['report_to'] == 'wandb': # TODO: remove redundant data
@@ -256,6 +292,47 @@ if __name__ == "__main__":
             "labels": labels
         }
 
+    pose_config = config['SignDataArguments']['visual_features']['pose']
+    train_raw_pose_data_path = pose_config['normalization']['train_json_dir']
+    val_raw_pose_data_path = pose_config['normalization']['val_json_dir']
+
+    augmentation_configs = get_augmentations(pose_config['augmentation_type'])
+    if os.path.isdir(train_raw_pose_data_path):
+        train_pose_dataset = KeypointDatasetJSON(json_folder=train_raw_pose_data_path,
+                                           kp_normalization=(
+                                               "global-pose_landmarks",
+                                               "local-right_hand_landmarks",
+                                               "local-left_hand_landmarks",
+                                               "local-face_landmarks",),
+                                           kp_normalization_method=pose_config['normalization']['normalization_method'],
+                                           data_key=pose_config['normalization']['data_key'],
+                                           missing_values=pose_config['missing_values'],
+                                           augmentation_configs=augmentation_configs,
+                                           load_from_raw=training_config['load_from_raw'],
+                                           interpolate=pose_config['interpolate'],
+                                           )
+        print('Train raw pose data path: {}'.format(train_raw_pose_data_path))
+    else:
+        train_pose_dataset = None
+        print('Raw poses not found in {}'.format(train_raw_pose_data_path))
+    if os.path.isdir(val_raw_pose_data_path):
+        val_pose_dataset = KeypointDatasetJSON(json_folder=val_raw_pose_data_path,
+                                           kp_normalization=(
+                                               "global-pose_landmarks",
+                                               "local-right_hand_landmarks",
+                                               "local-left_hand_landmarks",
+                                               "local-face_landmarks",),
+                                           kp_normalization_method=pose_config['normalization']['normalization_method'],
+                                           data_key=pose_config['normalization']['data_key'],
+                                           missing_values=pose_config['missing_values'],
+                                           augmentation_configs=[],
+                                           load_from_raw=training_config['load_from_raw'],
+                                           interpolate=pose_config['interpolate'],
+                                           )
+        print('Val raw pose data path: {}'.format(val_raw_pose_data_path))
+    else:
+        val_pose_dataset = None
+        print('Raw poses not found in {}'.format(val_raw_pose_data_path))
     train_dataset = DatasetForSLT(tokenizer= tokenizer,
                                 sign_data_args=config['SignDataArguments'],
                                 split='train',
@@ -263,6 +340,10 @@ if __name__ == "__main__":
                                 max_token_length=training_config['max_token_length'],
                                 max_sequence_length=training_config['max_sequence_length'],
                                 max_samples=training_config['max_train_samples'],
+                                pose_dataset=train_pose_dataset,
+                                float32=training_config['float32'],
+                                decimal_points=training_config['decimal_points'],
+                                paraphrases=training_config['use_paraphrases'],
                                 )
 
     val_dataset = DatasetForSLT(tokenizer= tokenizer,
@@ -272,6 +353,10 @@ if __name__ == "__main__":
                                 max_token_length=training_config['max_token_length'],
                                 max_sequence_length=training_config['max_sequence_length'],
                                 max_samples=training_config['max_val_samples'],
+                                pose_dataset=val_pose_dataset,
+                                float32=training_config['float32'],
+                                decimal_points=training_config['decimal_points'],
+                                paraphrases=False,
                                 )
 
     if args.verbose:
@@ -329,6 +414,12 @@ if __name__ == "__main__":
         print(f"Word Error Rate: {wer_score}")
         result["wer"] = wer_score
 
+        wer_metric = evaluate.load("wer")
+        flat_labels = [lab[0] if isinstance(lab, (list, tuple)) else lab for lab in decoded_labels]
+        wer_score = wer_metric.compute(predictions=decoded_preds, references=flat_labels)
+        print(f"Word Error Rate: {wer_score}")
+        result["wer"] = wer_score
+
         prediction_lens = [np.count_nonzero(pred != tokenizer.pad_token_id) for pred in preds]
         result["gen_len"] = np.mean(prediction_lens)
         result = {k: round(v, 4) for k, v in result.items()}
@@ -352,9 +443,11 @@ if __name__ == "__main__":
 
     training_args = Seq2SeqTrainingArguments(
         output_dir=os.path.join(training_config['output_dir'], training_config['model_name']),
+        dataloader_num_workers=training_config.get('dataloader_num_workers', 0),
         logging_steps=training_config['logging_steps'],
         num_train_epochs=num_train_epochs,
         # max_steps=args.max_training_steps,
+        warmup_steps=training_config['warmup_steps'],
         optim="adafactor",
         learning_rate=training_config['learning_rate'],
         lr_scheduler_type=training_config['lr_scheduler_type'],
@@ -375,6 +468,7 @@ if __name__ == "__main__":
         save_steps=training_config['save_steps'],
         generation_config=model.base_model.generation_config,
         ddp_find_unused_parameters=False,
+        seed=training_config['seed'],
     )
 
     if os.environ.get("LOCAL_RANK", "0") == "0" and training_config['report_to'] == 'wandb': # TODO: remove redundant data
