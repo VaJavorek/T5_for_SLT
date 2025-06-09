@@ -2,19 +2,19 @@ ModelArguments:
   base_model_name: google/mt5-base
   output_attentions: true
   hidden_dropout_prob: 0.0
-  num_beams: 5
+  num_beams: 4
   max_length: 128
 #  top_k: 50
-#  top_p: 0.95
+  top_p: 0.95
 #  temperature: 1.0
-  length_penalty: 0.6
+  length_penalty: 2.0
 #  repetition_penalty: 1.0
   early_stopping: True
   no_repeat_ngram_size: 3
   do_sample: True
 
 EvaluationArguments:
-  output_dir: ./results/0001last
+  output_dir: ./results/0013
   model_name: T5_YTASL_pretrain
   skip_frames: False
 #  Data processing
@@ -23,9 +23,9 @@ EvaluationArguments:
   max_token_length: 128
   float32: False
   decimal_points: -1
-  load_from_raw: False
+  load_from_raw: True
 #  Generation parameters
-  model_dir: /auto/plzen4-ntis/projects/korpusy_cv/Isharah1000/backup_checkpoints/0001-train_Isharah1000_mt5-base/checkpoint-12469/model.safetensors
+  model_dir: /auto/plzen4-ntis/projects/korpusy_cv/Isharah1000/backup_checkpoints/0013-train_Isharah1000_mt5-base/checkpoint-10940/model.safetensors
   batch_size: 5
 #  Debugging
   max_val_samples: none
@@ -47,6 +47,13 @@ SignDataArguments:
     pose:
       enable_input: True
       test: isharah.keypoints.dev.json
+      normalization:
+        test_json_dir: ./data_isharah/raw_keypoints/
+        normalization_method: sign_space
+        data_key: keypoints
+      augmentation_type: none
+      missing_values: -10
+      interpolate: 2
 
 SignModelArguments:
   projectors:

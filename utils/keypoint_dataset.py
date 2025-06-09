@@ -24,7 +24,7 @@ def get_keypoints(json_data, data_key='cropped_keypoints', missing_values=0):
     keypoints = json_data[data_key]
     for frame_id in range(len(keypoints)):
         if len(keypoints[frame_id]['pose_landmarks']) == 0:
-            _kp = np.zeros((33, 2)) + missing_values
+            _kp = np.zeros((24, 2)) + missing_values
             pose_landmarks.append(_kp)
         else:
             pose_landmarks.append(np.array(keypoints[frame_id]['pose_landmarks']))
@@ -42,12 +42,12 @@ def get_keypoints(json_data, data_key='cropped_keypoints', missing_values=0):
             left_hand_landmarks.append(np.array(keypoints[frame_id]['left_hand_landmarks']))
 
         if len(keypoints[frame_id]['face_landmarks']) == 0:
-            _kp = np.zeros((478, 2)) + missing_values
+            _kp = np.zeros((20, 2)) + missing_values
             face_landmarks.append(_kp)
         else:
             face_landmarks.append(np.array(keypoints[frame_id]['face_landmarks']))
 
-    pose_landmarks = np.array(pose_landmarks)[:, :25]
+    pose_landmarks = np.array(pose_landmarks)#[:, :25]
     return pose_landmarks, right_hand_landmarks, left_hand_landmarks, face_landmarks
 
 
@@ -189,7 +189,7 @@ class KeypointDatasetJSON(Dataset):
         keypoints = get_keypoints(keypoints_meta, data_key=self.data_key, missing_values=self.missing_values)
         pose_landmarks, right_hand_landmarks, left_hand_landmarks, face_landmarks = keypoints
         joints = {
-            'face_landmarks': np.array(face_landmarks)[:, self.face_landmarks, :],
+            'face_landmarks': np.array(face_landmarks),
             'left_hand_landmarks': np.array(left_hand_landmarks),
             'right_hand_landmarks': np.array(right_hand_landmarks),
             'pose_landmarks': np.array(pose_landmarks)
@@ -230,7 +230,9 @@ class KeypointDatasetJSON(Dataset):
         keypoints, additional_keypoints = global_keypoint_normalization(
             raw_keypoints,
             "pose_landmarks",
-            additional_landmarks
+            additional_landmarks,
+            l_shoulder_idx = 10,
+            r_shoulder_idx = 11
         )
 
         for k, landmark in global_landmarks.items():
