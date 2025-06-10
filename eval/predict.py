@@ -1,5 +1,7 @@
 import os
 import json
+import sys
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import torch
 import argparse
 import numpy as np
@@ -12,6 +14,7 @@ from utils.translation import postprocess_text
 import evaluate
 from sacrebleu.metrics import BLEU
 import yaml
+import csv
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
 from utils.keypoint_dataset import KeypointDatasetJSON
 
@@ -280,6 +283,15 @@ def main():
             print("-" * 50)
 
     # Compute metrics
+    wer_metric = evaluate.load("wer")
+    # Flatten references for WER and handle potential empty references
+    flat_labels = [lab[0] if isinstance(lab, (list, tuple)) else lab for lab in decoded_labels]
+    try:
+        wer_score = wer_metric.compute(predictions=decoded_preds, references=flat_labels)
+    except ValueError as e:
+        wer_score = None
+    print(f"Word Error Rate: {wer_score}")
+    
     decoded_labels = [list(x) for x in zip(*decoded_labels)]
     bleu1 = BLEU(max_ngram_order=1).corpus_score(decoded_preds,  decoded_labels)
     bleu2 = BLEU(max_ngram_order=2).corpus_score(decoded_preds,  decoded_labels)
@@ -295,7 +307,7 @@ def main():
         "bleu-3_precision": bleu4.precisions[2],
         "bleu-4_precision": bleu4.precisions[3],
     }
-
+    result["wer"] = wer_score
     result = {k: round(v, 4) for k, v in result.items()}
 
     if args.verbose:
@@ -313,11 +325,19 @@ def main():
     all_predictions = {'metrics': result, 'predictions': all_predictions[:100]}
 
     os.makedirs(evaluation_config['output_dir'], exist_ok=True)
-    prediction_file = os.path.join(evaluation_config['output_dir'], "predictions.json")
-    with open(prediction_file, "w") as f:
+    prediction_file = os.path.join(evaluation_config['output_dir'], f"predictions_{os.path.splitext(os.path.basename(config['SignDataArguments']['annotation_path'][evaluation_config['split']]))[0].split('.')[-1]}.json")
+    with open(prediction_file, "w", encoding="utf-8") as f:
         json.dump(all_predictions, f, ensure_ascii=False, indent=4)
 
     print(f"Predictions saved to {prediction_file}")
+    # Save submission CSV file
+    csv_file = os.path.join(evaluation_config['output_dir'], f"{os.path.splitext(os.path.basename(config['SignDataArguments']['annotation_path'][evaluation_config['split']]))[0].split('.')[-1]}.csv")
+    with open(csv_file, "w", encoding="utf-8", newline="") as csvf:
+        writer = csv.writer(csvf)
+        writer.writerow(["id", "gloss"])
+        ids = [dataset.clip_order_from_int[vid][cid] for vid, cid in dataset.list_data]
+        writer.writerows(zip(ids, decoded_preds))
+    print(f"Submission CSV saved to {csv_file}")
 
 if __name__ == "__main__":
     main()
