@@ -308,7 +308,7 @@ def main():
         "bleu-4_precision": bleu4.precisions[3],
     }
     result["wer"] = wer_score
-    result = {k: round(v, 4) for k, v in result.items()}
+    result = {k: round(v, 4) if isinstance(v, (int, float)) else v for k, v in result.items()}
 
     if args.verbose:
         for key, value in result.items():
