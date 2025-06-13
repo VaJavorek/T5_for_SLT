@@ -1,0 +1,69 @@
+ModelArguments:
+  base_model_name: google/mt5-base
+  output_attentions: true
+  hidden_dropout_prob: 0.0
+  num_beams: 4
+  max_length: 128
+  top_k: 50
+  top_p: 0.95
+#  temperature: 1.0
+  length_penalty: 2.0
+#  repetition_penalty: 1.0
+  early_stopping: True
+  no_repeat_ngram_size: 3
+  do_sample: True
+
+EvaluationArguments:
+  output_dir: ./results/task2_0015
+  model_name: T5_YTASL_pretrain
+  skip_frames: False
+#  Data processing
+  split: test
+  max_sequence_length: 250
+  max_token_length: 256
+  float32: False
+  decimal_points: -1
+  load_from_raw: True
+#  Generation parameters
+  model_dir: /auto/plzen4-ntis/projects/korpusy_cv/Isharah1000/backup_checkpoints/0015-train_Isharah1000_mt5-base/checkpoint-10300/model.safetensors
+  # model_dir: ./checkpoints/0015-train_Isharah1000_mt5-base/checkpoint-10300/model.safetensors
+  batch_size: 5
+#  Debugging
+  max_val_samples: none
+
+SignDataArguments:
+  data_dir: ./data_isharah
+  annotation_path:
+    test: isharah.annotations.dev_2.json
+  visual_features:
+    sign2vec:
+      enable_input: False
+      test: sign2vec/metadata_sign2vec.dev.json
+    mae:
+      enable_input: False
+      test: mae/metadata_mae.dev.json
+    dino:
+      enable_input: False
+      test: dino/metadata_dino.dev.json
+    pose:
+      enable_input: True
+      test: isharah.keypoints.dev_2.json
+      normalization:
+        test_json_dir: ./data_isharah/raw_keypoints_2/
+        normalization_method: sign_space
+        data_key: keypoints
+      augmentation_type: none
+      missing_values: -10
+      interpolate: 2
+
+SignModelArguments:
+  projectors:
+    sign2vec:
+      dim: 768
+    mae:
+      dim: 768
+    dino:
+      dim: 1152
+    pose:
+      # dim: 208
+      dim: 172
