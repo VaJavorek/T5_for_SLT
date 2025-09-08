@@ -120,8 +120,10 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
         for step, batch in enumerate(dataloader):
             # Move tensors to device; keep labels as tensor
             batch = {k: v.to(model.base_model.device) for k, v in batch.items()}
+            # Do not pass labels into generate
+            gen_batch = {k: v for k, v in batch.items() if k != "labels"}
             outputs = model.generate(
-                **batch,
+                **gen_batch,
                 early_stopping=model.config.early_stopping,
                 no_repeat_ngram_size=model.config.no_repeat_ngram_size,
                 max_length=evaluation_config['max_sequence_length'],
@@ -212,19 +214,35 @@ def main():
         }
 
         # Process each enabled modality
-        sign_inputs = [
-            torch.stack([
-                torch.cat((sample["sign_inputs"][mod],
-                           torch.zeros(max_seq_len - sample["sign_inputs"][mod].shape[0], modality_dim[mod])), dim=0)
+        # Use actual feature width per modality from the first sample; truncate then pad to max_seq_len
+        sign_inputs = []
+        for mod in modalities:
+            feat_dim = batch[0]["sign_inputs"][mod].shape[1]
+            stacked = torch.stack([
+                torch.cat(
+                    (
+                        sample["sign_inputs"][mod][:max_seq_len],
+                        torch.zeros(
+                            max(0, max_seq_len - sample["sign_inputs"][mod].shape[0]),
+                            feat_dim,
+                            dtype=sample["sign_inputs"][mod].dtype,
+                        ),
+                    ),
+                    dim=0,
+                )
                 for sample in batch
             ])
-            for mod in modalities
-        ]
+            sign_inputs.append(stacked)
 
         # Process attention mask
         attention_mask = torch.stack([
-            torch.cat((sample["attention_mask"], torch.zeros(max_seq_len - sample["attention_mask"].shape[0])), dim=0)
-            if sample["attention_mask"].shape[0] < max_seq_len else sample["attention_mask"]
+            torch.cat(
+                (
+                    sample["attention_mask"][:max_seq_len],
+                    torch.zeros(max(0, max_seq_len - sample["attention_mask"].shape[0])),
+                ),
+                dim=0,
+            )
             for sample in batch
         ])
 
@@ -372,7 +390,10 @@ def main():
         }
     }
 
-    result = {k: round(v, 4) for k, v in result.items()}
+    # Round nested floats to 4 decimals
+    for group in ["without_paraphrases", "with_paraphrases"]:
+        for k in list(result[group].keys()):
+            result[group][k] = round(result[group][k], 4)
 
     if args.verbose:
         print("BLEU without paraphrases:")
