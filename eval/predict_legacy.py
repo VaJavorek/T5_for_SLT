@@ -14,7 +14,6 @@ from sacrebleu.metrics import BLEU
 import yaml
 from dataset.generic_sl_dataset import SignFeatureDataset as DatasetForSLT
 from utils.keypoint_dataset import KeypointDatasetJSON
-import torch.nn.functional as F
 
 load_dotenv()
 
@@ -32,7 +31,6 @@ def parse_args():
     parser.add_argument("--max_sequence_length", type=int, default=None, help="Max number of frames for sign inputs.")
     parser.add_argument("--max_token_length", type=int, default=None, help="Max token length for labels.")
     parser.add_argument("--skip_frames", default=None)
-    parser.add_argument("--paraphrase_mode", type=str, default=None, help='Paraphrase mode: "none" | "random" | "min_loss"')
 
     # Generation parameters
     parser.add_argument("--model_dir", type=str, default=None, help="Path to the directory containing the fine-tuned model and config.")
@@ -68,11 +66,6 @@ def load_config(cfg_path):
     for param, value in cfg['EvaluationArguments'].items():
         if value == 'none' or value == 'None':
             cfg['EvaluationArguments'][param] = None
-
-    # Default paraphrase behavior for evaluation: include all references so we can report
-    # metrics with and without paraphrases. If missing, fall back to "min_loss".
-    if 'paraphrase_mode' not in cfg['EvaluationArguments'] or cfg['EvaluationArguments']['paraphrase_mode'] is None:
-        cfg['EvaluationArguments']['paraphrase_mode'] = 'min_loss'
 
     return cfg
 
@@ -115,15 +108,14 @@ def update_config(cfg, args):
 
 def evaluate_model(model, dataloader, tokenizer, evaluation_config):
     model.eval()
-    predictions, canonical_refs, all_refs = [], [], []
+    predictions, labels = [], []
     with torch.no_grad():
         for step, batch in enumerate(dataloader):
-            # Move tensors to device; keep labels as tensor
             batch = {k: v.to(model.base_model.device) for k, v in batch.items()}
-            # Do not pass labels into generate
-            gen_batch = {k: v for k, v in batch.items() if k != "labels"}
+            if len(batch['labels'].shape) < 2:
+                batch['labels'] = batch['labels'].unsqueeze(0)
             outputs = model.generate(
-                **gen_batch,
+                **batch,
                 early_stopping=model.config.early_stopping,
                 no_repeat_ngram_size=model.config.no_repeat_ngram_size,
                 max_length=evaluation_config['max_sequence_length'],
@@ -137,31 +129,11 @@ def evaluate_model(model, dataloader, tokenizer, evaluation_config):
             outputs[outputs > len(tokenizer) - 1] = tokenizer.unk_token_id
 
             decoded_preds = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-            labels_tensor = batch["labels"].detach().cpu()
+            decoded_labels = tokenizer.batch_decode(batch["labels"], skip_special_tokens=True)
 
-            if labels_tensor.dim() == 2:  # [B, L]
-                decoded_labels = tokenizer.batch_decode(labels_tensor, skip_special_tokens=True)
-                predictions.extend(decoded_preds)
-                canonical_refs.extend(decoded_labels)
-                all_refs.extend([[ref] for ref in decoded_labels])
-            elif labels_tensor.dim() == 3:  # [B, P, L]
-                B, P, L = labels_tensor.size()
-                # Identify valid paraphrase rows (at least one non-pad token)
-                valid_rows = labels_tensor.ne(tokenizer.pad_token_id).any(dim=2)  # [B, P]
-                refs_per_sample, canonical = [], []
-                for i in range(B):
-                    valid_idx = valid_rows[i]
-                    rows = labels_tensor[i][valid_idx]
-                    decoded = tokenizer.batch_decode(rows, skip_special_tokens=True) if rows.numel() > 0 else [""]
-                    refs_per_sample.append(decoded)
-                    canonical.append(decoded[-1])  # translation is last real row in dataset
-
-                predictions.extend(decoded_preds)
-                canonical_refs.extend(canonical)
-                all_refs.extend(refs_per_sample)
-            else:
-                raise ValueError(f"Unexpected labels shape: {labels_tensor.size()}")
-    return predictions, canonical_refs, all_refs
+            predictions.extend(decoded_preds)
+            labels.extend([[translation] for translation in decoded_labels])
+    return predictions, labels
 
 
 def get_sign_input_dim(config):
@@ -203,7 +175,7 @@ def main():
             # "attention_mask" must be 250 frames long
             # "labels" must be 128 tokens long
         max_seq_len = evaluation_config['max_sequence_length']
-        # Note: labels may be 2D [L] or 2D per-sample [P, L]; we'll pad both dims dynamically
+        max_token_len = evaluation_config['max_token_length']
 
         # List of enabled modalities (based on config)
         modalities = [
@@ -217,62 +189,28 @@ def main():
         }
 
         # Process each enabled modality
-        # Use actual feature width per modality from the first sample; truncate then pad to max_seq_len
-        sign_inputs = []
-        for mod in modalities:
-            feat_dim = batch[0]["sign_inputs"][mod].shape[1]
-            stacked = torch.stack([
-                torch.cat(
-                    (
-                        sample["sign_inputs"][mod][:max_seq_len],
-                        torch.zeros(
-                            max(0, max_seq_len - sample["sign_inputs"][mod].shape[0]),
-                            feat_dim,
-                            dtype=sample["sign_inputs"][mod].dtype,
-                        ),
-                    ),
-                    dim=0,
-                )
+        sign_inputs = [
+            torch.stack([
+                torch.cat((sample["sign_inputs"][mod],
+                           torch.zeros(max_seq_len - sample["sign_inputs"][mod].shape[0], modality_dim[mod])), dim=0)
                 for sample in batch
             ])
-            sign_inputs.append(stacked)
+            for mod in modalities
+        ]
 
         # Process attention mask
         attention_mask = torch.stack([
-            torch.cat(
-                (
-                    sample["attention_mask"][:max_seq_len],
-                    torch.zeros(max(0, max_seq_len - sample["attention_mask"].shape[0])),
-                ),
-                dim=0,
-            )
+            torch.cat((sample["attention_mask"], torch.zeros(max_seq_len - sample["attention_mask"].shape[0])), dim=0)
+            if sample["attention_mask"].shape[0] < max_seq_len else sample["attention_mask"]
             for sample in batch
         ])
 
         # Process labels
-        # Each sample["labels"] may be [L] or [P, L]. Normalize to [P, L] and pad P and L.
-        # Determine max paraphrases (P) and max tokens (L) in this batch
-        def get_PL(x):
-            if x.dim() == 1:
-                return 1, x.size(0)
-            return x.size(0), x.size(1)
-
-        max_p = max(get_PL(sample["labels"])[0] for sample in batch)
-        max_l = max(get_PL(sample["labels"])[1] for sample in batch)
-
-        padded_labels = []
-        for sample in batch:
-            lab = sample["labels"]
-            if lab.dim() == 1:  # [L] -> [1, L]
-                lab = lab.unsqueeze(0)
-            lab = F.pad(
-                lab,
-                pad=(0, max_l - lab.size(1),   # tokens
-                     0, max_p - lab.size(0)),  # paraphrases
-                value=tokenizer.pad_token_id,
-            )
-            padded_labels.append(lab)
-        labels = torch.stack(padded_labels).to(torch.long)  # [B, max_P, max_L]
+        labels = torch.stack([
+            torch.cat((sample["labels"].squeeze(0), torch.zeros(max_token_len - sample["labels"].shape[0])), dim=0)
+            if sample["labels"].shape[0] < max_token_len else sample["labels"]
+            for sample in batch
+        ]).squeeze(0).to(torch.long)
 
         return {
             "sign_inputs": torch.cat(sign_inputs, dim=-1),
@@ -312,7 +250,6 @@ def main():
                                 pose_dataset=test_pose_dataset,
                                 float32=evaluation_config['float32'],
                                 decimal_points=evaluation_config['decimal_points'],
-                                paraphrase_mode=evaluation_config['paraphrase_mode'],
                                 )
 
     dataloader = torch.utils.data.DataLoader(
@@ -331,101 +268,49 @@ def main():
     model.to(device)
 
     print("Evaluating...")
-    predictions, canonical_refs, all_refs = evaluate_model(model, dataloader, tokenizer, evaluation_config)
+    predictions, labels = evaluate_model(model, dataloader, tokenizer, evaluation_config)
 
     # Postprocess predictions and references
-    # Strip whitespace
-    decoded_preds = [p.strip() for p in predictions]
-    decoded_labels_canonical = [r.strip() for r in canonical_refs]
-    decoded_labels_all = [[r.strip() for r in refs] for refs in all_refs]
+    decoded_preds, decoded_labels = postprocess_text(predictions, [ref[0] for ref in labels])
 
     if args.verbose:
         for i in range(min(5, len(decoded_preds))):
             print("Prediction:", decoded_preds[i])
-            print("Reference (canonical):", decoded_labels_canonical[i])
-            print("References (all):", decoded_labels_all[i])
+            print("Reference:", decoded_labels[i])
             print("-" * 50)
 
     # Compute metrics
-    # Prepare references for corpus BLEU
-    # Without paraphrases: single canonical reference corpus [1 x N]
-    refs_without = [decoded_labels_canonical]
-
-    # With paraphrases: build reference corpora [R_max x N], padding with canonical when needed
-    max_r = max(len(refs) for refs in decoded_labels_all) if len(decoded_labels_all) > 0 else 1
-    refs_with = []
-    for i in range(max_r):
-        col = [refs[i] if i < len(refs) else refs[-1] for refs in decoded_labels_all]
-        refs_with.append(col)
-
-    # Compute metrics without paraphrases
-    bleu1_wo = BLEU(max_ngram_order=1).corpus_score(decoded_preds, refs_without)
-    bleu2_wo = BLEU(max_ngram_order=2).corpus_score(decoded_preds, refs_without)
-    bleu3_wo = BLEU(max_ngram_order=3).corpus_score(decoded_preds, refs_without)
-    bleu4_wo = BLEU(max_ngram_order=4).corpus_score(decoded_preds, refs_without)
-
-    # Compute metrics with paraphrases
-    bleu1_w = BLEU(max_ngram_order=1).corpus_score(decoded_preds, refs_with)
-    bleu2_w = BLEU(max_ngram_order=2).corpus_score(decoded_preds, refs_with)
-    bleu3_w = BLEU(max_ngram_order=3).corpus_score(decoded_preds, refs_with)
-    bleu4_w = BLEU(max_ngram_order=4).corpus_score(decoded_preds, refs_with)
-
+    decoded_labels = [list(x) for x in zip(*decoded_labels)]
+    bleu1 = BLEU(max_ngram_order=1).corpus_score(decoded_preds,  decoded_labels)
+    bleu2 = BLEU(max_ngram_order=2).corpus_score(decoded_preds,  decoded_labels)
+    bleu3 = BLEU(max_ngram_order=3).corpus_score(decoded_preds,  decoded_labels)
+    bleu4 = BLEU(max_ngram_order=4).corpus_score(decoded_preds,  decoded_labels)
     result = {
-        "without_paraphrases": {
-            "bleu-1": bleu1_wo.score,
-            "bleu-2": bleu2_wo.score,
-            "bleu-3": bleu3_wo.score,
-            "bleu-4": bleu4_wo.score,
-            "bleu-1_precision": bleu4_wo.precisions[0],
-            "bleu-2_precision": bleu4_wo.precisions[1],
-            "bleu-3_precision": bleu4_wo.precisions[2],
-            "bleu-4_precision": bleu4_wo.precisions[3],
-        },
-        "with_paraphrases": {
-            "bleu-1": bleu1_w.score,
-            "bleu-2": bleu2_w.score,
-            "bleu-3": bleu3_w.score,
-            "bleu-4": bleu4_w.score,
-            "bleu-1_precision": bleu4_w.precisions[0],
-            "bleu-2_precision": bleu4_w.precisions[1],
-            "bleu-3_precision": bleu4_w.precisions[2],
-            "bleu-4_precision": bleu4_w.precisions[3],
-        }
+        "bleu-1": bleu1.score,
+        "bleu-2": bleu2.score,
+        "bleu-3": bleu3.score,
+        "bleu-4": bleu4.score,
+        "bleu-1_precision": bleu4.precisions[0],
+        "bleu-2_precision": bleu4.precisions[1],
+        "bleu-3_precision": bleu4.precisions[2],
+        "bleu-4_precision": bleu4.precisions[3],
     }
 
-    # Round nested floats to 4 decimals
-    for group in ["without_paraphrases", "with_paraphrases"]:
-        for k in list(result[group].keys()):
-            result[group][k] = round(result[group][k], 4)
+    result = {k: round(v, 4) for k, v in result.items()}
 
     if args.verbose:
-        print("BLEU without paraphrases:")
-        for key, value in result["without_paraphrases"].items():
-            print(f"  {key}: {value:.4f}")
-        print("BLEU with paraphrases:")
-        for key, value in result["with_paraphrases"].items():
-            print(f"  {key}: {value:.4f}")
+        for key, value in result.items():
+            print(f"{key}: {value:.4f}")
 
     # Save predictions
-    # Build per-sample best paraphrase info (by sentence BLEU-4)
-    bleu_sent = BLEU(max_ngram_order=4)
-    per_sample = []
-    for pred, canon, refs in zip(decoded_preds, decoded_labels_canonical, decoded_labels_all):
-        best_ref = None
-        best_score = -1.0
-        for r in refs:
-            s = bleu_sent.sentence_score(pred, [r]).score
-            if s > best_score:
-                best_score = s
-                best_ref = r
-        per_sample.append({
+    all_predictions = [
+        {
             "prediction": pred,
-            "reference_canonical": canon,
-            "best_reference": best_ref,
-            "best_bleu4": round(best_score, 4),
-        })
-
-    all_predictions = {'metrics': result, 'predictions': per_sample[:100]}
+            "reference": ref
+        }
+        for pred, ref in zip(decoded_preds, decoded_labels[0])
+    ]
+    all_predictions = {'metrics': result, 'predictions': all_predictions[:100]}
 
     os.makedirs(evaluation_config['output_dir'], exist_ok=True)
     prediction_file = os.path.join(evaluation_config['output_dir'], "predictions.json")
