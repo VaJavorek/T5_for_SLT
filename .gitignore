@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 
 /checkpoints
 /data
@@ -12,3 +13,12 @@ evaluation_customgen.log
 notepad.txt
 /data_isharah
 /data_isharah_padded
+=======
+/checkpoints
+/data_isharah
+/results
+/utils/__pycache__
+/model/__pycache__
+/.vscode
+/data
+>>>>>>> Stashed changes
