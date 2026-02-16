@@ -50,6 +50,37 @@ def pad_row(row, target_length):
     padded[:len(row)] = row
     return padded
 
+def pad_matrix(mat, target_rows, target_cols):
+    """Pad a 2D matrix with zeros to target shape."""
+    out = np.zeros((target_rows, target_cols), dtype=np.float64)
+    r = min(target_rows, mat.shape[0])
+    c = min(target_cols, mat.shape[1])
+    out[:r, :c] = mat[:r, :c]
+    return out
+
+def mean_matrices_with_padding(mats):
+    """Average 2D matrices with potentially different shapes via zero-padding."""
+    if not mats:
+        return np.zeros((1, 1), dtype=np.float64)
+    max_rows = max(m.shape[0] for m in mats)
+    max_cols = max(m.shape[1] for m in mats)
+    padded = [pad_matrix(m, max_rows, max_cols) for m in mats]
+    return np.mean(np.stack(padded, axis=0), axis=0)
+
+def has_mode(args, mode_name):
+    """
+    Mode matcher.
+    Supports:
+      --mode all
+      --mode avg_layers
+      --mode avg_layers,avg_heads_per_layer,avg_all
+    """
+    raw = str(args.mode).strip()
+    if raw == "all":
+        return True
+    mode_set = {m.strip() for m in raw.split(",") if m.strip()}
+    return mode_name in mode_set
+
 def plot_grid(matrices, titles, main_title, output_path, n_cols=4, show_y_labels=False, x_labels=None, y_labels_list=None):
     """Generic plotting function for a grid of matrices."""
     num_plots = len(matrices)
@@ -129,6 +160,32 @@ def plot_histograms(data_list, titles, main_title, output_path, n_cols=4, x_labe
     plt.close(fig)
     print(f"Saved histogram: {output_path}")
 
+def get_ref_pred(data):
+    """Extract first reference/prediction strings from one batch JSON."""
+    refs = data.get("reference_translations", [])
+    preds = data.get("predictions", [])
+    ref = refs[0] if refs else ""
+    pred = preds[0] if preds else ""
+    return str(ref), str(pred)
+
+def write_batch_summary(summary_path, loaded_batches):
+    """
+    Write GT/prediction overview before plotting.
+    Format per batch:
+      batch_x
+      GT: ...
+      Pred: ...
+    """
+    with open(summary_path, "w", encoding="utf-8") as f:
+        for i, (base_name, _fpath, data) in enumerate(loaded_batches):
+            ref, pred = get_ref_pred(data)
+            f.write(f"{base_name}\n")
+            f.write(f"GT:   {ref}\n")
+            f.write(f"Pred: {pred}\n\n")
+            if i < len(loaded_batches) - 1:
+                f.write("\n")
+    print(f"Saved batch summary: {summary_path}")
+
 # --- Processing Logic ---
 
 def process_encoder(data, args, output_base, filename_base):
@@ -139,8 +196,7 @@ def process_encoder(data, args, output_base, filename_base):
     attentions = data.get('encoder_attentions')
     if not attentions: return
 
-    ref = data['reference_translations'][0]
-    pred = data['predictions'][0]
+    ref, pred = get_ref_pred(data)
     
     num_layers = len(attentions)
     num_heads = len(attentions[0][0])
@@ -155,7 +211,7 @@ def process_encoder(data, args, output_base, filename_base):
         layers_data.append(head_data)
     
     # 1. Per-Layer Heads Visualization
-    if 'layer_heads' in args.mode or 'all' in args.mode:
+    if has_mode(args, 'layer_heads'):
         for l in range(num_layers):
             matrices = []
             titles = []
@@ -178,7 +234,7 @@ def process_encoder(data, args, output_base, filename_base):
                       out_path)
 
     # 2. Average Heads (collapsed layers)
-    if 'avg_layers' in args.mode or 'all' in args.mode:
+    if has_mode(args, 'avg_layers'):
         avg_matrices = []
         titles = []
         for h in range(num_heads):
@@ -206,6 +262,59 @@ def process_encoder(data, args, output_base, filename_base):
                   create_title_with_translation(filename_base, "Encoder Attention (Avg across Layers)", ref, pred),
                   out_path)
 
+    # 3. Per-layer average across heads
+    if has_mode(args, 'avg_heads_per_layer'):
+        layer_avg_matrices = []
+        titles = []
+        for l in range(num_layers):
+            layer_mat = np.mean(np.stack(layers_data[l], axis=0), axis=0)
+            bbox = None
+            if args.crop in ['auto', 'square']:
+                bbox = find_nonzero_bbox(layer_mat, args.threshold)
+                if args.crop == 'square':
+                    bbox = enforce_square_bbox(bbox)
+            if args.crop == 'fixed':
+                bbox = (0, 100, 0, 100)
+            if bbox:
+                layer_mat = crop_matrix(layer_mat, bbox)
+            elif args.crop == 'none':
+                layer_mat = crop_matrix(layer_mat, (0, layer_mat.shape[0]-1, 0, layer_mat.shape[1]-1))
+            else:
+                layer_mat = np.zeros((1, 1))
+            layer_avg_matrices.append(layer_mat)
+            titles.append(f"Layer {l+1} (Avg Heads)")
+
+        out_path = os.path.join(output_base, f"{filename_base}_enc_avg_heads_per_layer.png")
+        plot_grid(
+            layer_avg_matrices,
+            titles,
+            create_title_with_translation(filename_base, "Encoder Attention (Avg across Heads per Layer)", ref, pred),
+            out_path,
+        )
+
+    # 4. Global average across layers and heads
+    if has_mode(args, 'avg_all'):
+        all_layer_head_mats = [layers_data[l][h] for l in range(num_layers) for h in range(num_heads)]
+        global_avg = np.mean(np.stack(all_layer_head_mats, axis=0), axis=0)
+        bbox = None
+        if args.crop in ['auto', 'square']:
+            bbox = find_nonzero_bbox(global_avg, args.threshold)
+            if args.crop == 'square':
+                bbox = enforce_square_bbox(bbox)
+        if args.crop == 'fixed':
+            bbox = (0, 100, 0, 100)
+        global_plot = crop_matrix(global_avg, bbox) if bbox else (
+            crop_matrix(global_avg, (0, global_avg.shape[0]-1, 0, global_avg.shape[1]-1)) if args.crop == 'none' else np.zeros((1, 1))
+        )
+        out_path = os.path.join(output_base, f"{filename_base}_enc_avg_all_layers_heads.png")
+        plot_grid(
+            [global_plot],
+            ["Global Avg (Layers+Heads)"],
+            create_title_with_translation(filename_base, "Encoder Attention (Global Average)", ref, pred),
+            out_path,
+            n_cols=1,
+        )
+
 
 def process_decoder(data, args, output_base, filename_base):
     """
@@ -215,8 +324,7 @@ def process_decoder(data, args, output_base, filename_base):
     attentions = data.get('decoder_attentions') # List of steps
     if not attentions: return
     
-    ref = data['reference_translations'][0]
-    pred = data['predictions'][0]
+    ref, pred = get_ref_pred(data)
     
     num_steps = len(attentions)
     num_layers = len(attentions[0])
@@ -234,7 +342,7 @@ def process_decoder(data, args, output_base, filename_base):
         return np.stack([pad_row(r, max_len) for r in rows])
 
     # 1. Per-Layer
-    if 'layer_heads' in args.mode or 'all' in args.mode:
+    if has_mode(args, 'layer_heads'):
         for l in range(num_layers):
             matrices = []
             titles = []
@@ -250,7 +358,7 @@ def process_decoder(data, args, output_base, filename_base):
                       out_path)
 
     # 2. Avg across layers (for each head)
-    if 'avg_layers' in args.mode or 'all' in args.mode:
+    if has_mode(args, 'avg_layers'):
         matrices = []
         titles = []
         for h in range(num_heads):
@@ -278,9 +386,52 @@ def process_decoder(data, args, output_base, filename_base):
         plot_grid(matrices, titles,
                   create_title_with_translation(filename_base, "Decoder Attention (Avg across Layers)", ref, pred),
                   out_path)
-    
-    # 3. Histograms (Column Sums of Avg Matrix)
-    if 'hist' in args.mode or 'all' in args.mode:
+
+    # 3. Per-layer average across heads
+    if has_mode(args, 'avg_heads_per_layer'):
+        layer_avg_matrices = []
+        titles = []
+        for l in range(num_layers):
+            head_mats = [build_matrix(l, h) for h in range(num_heads)]
+            layer_avg = mean_matrices_with_padding(head_mats)
+            bbox = find_nonzero_bbox(layer_avg, args.threshold) if args.crop in ['auto', 'square'] else None
+            if args.crop == 'square':
+                bbox = enforce_square_bbox(bbox)
+            if args.crop == 'fixed':
+                bbox = (0, 100, 0, 100)
+            layer_avg = crop_matrix(layer_avg, bbox) if bbox else layer_avg
+            layer_avg_matrices.append(layer_avg)
+            titles.append(f"Layer {l+1} (Avg Heads)")
+
+        out_path = os.path.join(output_base, f"{filename_base}_dec_avg_heads_per_layer.png")
+        plot_grid(
+            layer_avg_matrices,
+            titles,
+            create_title_with_translation(filename_base, "Decoder Attention (Avg across Heads per Layer)", ref, pred),
+            out_path,
+        )
+
+    # 4. Global average across layers and heads
+    if has_mode(args, 'avg_all'):
+        all_mats = [build_matrix(l, h) for l in range(num_layers) for h in range(num_heads)]
+        global_avg = mean_matrices_with_padding(all_mats)
+        bbox = find_nonzero_bbox(global_avg, args.threshold) if args.crop in ['auto', 'square'] else None
+        if args.crop == 'square':
+            bbox = enforce_square_bbox(bbox)
+        if args.crop == 'fixed':
+            bbox = (0, 100, 0, 100)
+        global_plot = crop_matrix(global_avg, bbox) if bbox else global_avg
+        out_path = os.path.join(output_base, f"{filename_base}_dec_avg_all_layers_heads.png")
+        plot_grid(
+            [global_plot],
+            ["Global Avg (Layers+Heads)"],
+            create_title_with_translation(filename_base, "Decoder Attention (Global Average)", ref, pred),
+            out_path,
+            n_cols=1,
+        )
+
+    # 5. Histograms (Column Sums of Avg Matrix)
+    if has_mode(args, 'hist'):
          # Reuse logic from Avg across layers to get matrices
          # ... (Redundant calc, but for clarity kept separate or cached)
          # For brevity, let's assume we want histograms of the Avg-Head matrices calculated above
@@ -324,8 +475,7 @@ def process_cross(data, args, output_base, filename_base):
     attentions = data.get('cross_attentions')
     if not attentions: return
     
-    ref = data['reference_translations'][0]
-    pred = data['predictions'][0]
+    ref, pred = get_ref_pred(data)
     decoded_tokens = data.get('decoded_tokens', [[]])[0] # Tokens on Y axis
     
     # If using stored batch format, cross_attentions might be a 6D tensor or list of lists
@@ -351,7 +501,7 @@ def process_cross(data, args, output_base, filename_base):
     frame_indices = list(range(seq_len))
     
     # 1. Avg across layers (for each head)
-    if 'avg_layers' in args.mode or 'all' in args.mode:
+    if has_mode(args, 'avg_layers'):
         avg_matrices = []
         titles = []
         y_labels = []
@@ -385,8 +535,79 @@ def process_cross(data, args, output_base, filename_base):
                   create_title_with_translation(filename_base, "Cross Attention (Avg Layers)", ref, pred),
                   out_path, show_y_labels=True, x_labels=x_labels, y_labels_list=y_labels)
 
-    # 2. Global Histogram
-    if 'hist' in args.mode or 'all' in args.mode:
+    # 2. Per-layer average across heads
+    if has_mode(args, 'avg_heads_per_layer'):
+        layer_avg_matrices = []
+        titles = []
+        y_labels = []
+        x_labels = []
+        for l in range(num_layers):
+            layer_avg = np.mean(arr[:, l, :, :], axis=1)  # (steps, seq)
+            bbox = find_nonzero_bbox(layer_avg, args.threshold) if args.crop in ['auto', 'square'] else None
+            if args.crop == 'square':
+                bbox = enforce_square_bbox(bbox)
+            if args.crop == 'fixed':
+                bbox = (0, 100, 0, 100)
+
+            if bbox:
+                mat_crop = crop_matrix(layer_avg, bbox)
+                r1, r2, c1, c2 = bbox
+                y_lbl = decoded_tokens[r1:r2+1] if r2 < len(decoded_tokens) else []
+                x_lbl = [str(i) for i in frame_indices[c1:c2+1]]
+            else:
+                mat_crop = layer_avg
+                y_lbl = decoded_tokens
+                x_lbl = [str(i) for i in frame_indices]
+
+            layer_avg_matrices.append(mat_crop)
+            titles.append(f"Layer {l+1} (Avg Heads)")
+            y_labels.append(y_lbl)
+            x_labels.append(x_lbl)
+
+        out_path = os.path.join(output_base, f"{filename_base}_cross_avg_heads_per_layer.png")
+        plot_grid(
+            layer_avg_matrices,
+            titles,
+            create_title_with_translation(filename_base, "Cross Attention (Avg across Heads per Layer)", ref, pred),
+            out_path,
+            show_y_labels=True,
+            x_labels=x_labels,
+            y_labels_list=y_labels,
+        )
+
+    # 3. Global average across layers and heads
+    if has_mode(args, 'avg_all'):
+        global_avg_mat = np.mean(arr, axis=(1, 2))  # (steps, seq)
+        bbox = find_nonzero_bbox(global_avg_mat, args.threshold) if args.crop in ['auto', 'square'] else None
+        if args.crop == 'square':
+            bbox = enforce_square_bbox(bbox)
+        if args.crop == 'fixed':
+            bbox = (0, 100, 0, 100)
+
+        if bbox:
+            mat_crop = crop_matrix(global_avg_mat, bbox)
+            r1, r2, c1, c2 = bbox
+            y_lbl = decoded_tokens[r1:r2+1] if r2 < len(decoded_tokens) else []
+            x_lbl = [str(i) for i in frame_indices[c1:c2+1]]
+        else:
+            mat_crop = global_avg_mat
+            y_lbl = decoded_tokens
+            x_lbl = [str(i) for i in frame_indices]
+
+        out_path = os.path.join(output_base, f"{filename_base}_cross_avg_all_layers_heads.png")
+        plot_grid(
+            [mat_crop],
+            ["Global Avg (Layers+Heads)"],
+            create_title_with_translation(filename_base, "Cross Attention (Global Average)", ref, pred),
+            out_path,
+            n_cols=1,
+            show_y_labels=True,
+            x_labels=[x_lbl],
+            y_labels_list=[y_lbl],
+        )
+
+    # 4. Global Histogram
+    if has_mode(args, 'hist'):
         # Mean across layers AND heads
         # arr -> (steps, layers, heads, seq)
         # mean(1,2) -> (steps, seq) -> sum(0) -> (seq)
@@ -415,7 +636,7 @@ def main():
     parser.add_argument('--input', type=str, required=True, help="Path to JSON file or directory")
     parser.add_argument('--output', type=str, required=True, help="Output directory")
     parser.add_argument('--type', type=str, default='all', choices=['encoder', 'decoder', 'cross', 'all'], help="Attention type to visualize")
-    parser.add_argument('--mode', type=str, default='all', help="Comma separated modes: layer_heads, avg_layers, hist, all")
+    parser.add_argument('--mode', type=str, default='all', help="Comma separated modes: layer_heads, avg_layers, avg_heads_per_layer, avg_all, hist, all")
     parser.add_argument('--crop', type=str, default='auto', choices=['auto', 'square', 'fixed', 'none'], help="Cropping strategy")
     parser.add_argument('--threshold', type=float, default=1e-9, help="Threshold for zero-value detection")
     parser.add_argument('--max_files', type=int, default=None, help="Max files to process")
@@ -434,23 +655,34 @@ def main():
         files = files[:args.max_files]
         
     print(f"Processing {len(files)} files...")
-    
-    for fpath in tqdm(files):
+
+    # Load all valid batches first, then write summary before generating any plots.
+    loaded_batches = []
+    for fpath in files:
         try:
             with open(fpath, 'r') as f:
                 data = json.load(f)
         except Exception as e:
             print(f"Error loading {fpath}: {e}")
             continue
-            
+
         base_name = os.path.splitext(os.path.basename(fpath))[0]
-        
+        loaded_batches.append((base_name, fpath, data))
+
+    summary_path = os.path.join(args.output, "batch_text_comparison.txt")
+    write_batch_summary(summary_path, loaded_batches)
+
+    for base_name, _fpath, data in tqdm(loaded_batches):
+        # Keep each batch outputs grouped in its own directory.
+        batch_output_dir = os.path.join(args.output, base_name)
+        os.makedirs(batch_output_dir, exist_ok=True)
+
         if args.type in ['encoder', 'all']:
-            process_encoder(data, args, args.output, base_name)
+            process_encoder(data, args, batch_output_dir, base_name)
         if args.type in ['decoder', 'all']:
-            process_decoder(data, args, args.output, base_name)
+            process_decoder(data, args, batch_output_dir, base_name)
         if args.type in ['cross', 'all']:
-            process_cross(data, args, args.output, base_name)
+            process_cross(data, args, batch_output_dir, base_name)
 
 if __name__ == "__main__":
     main()
