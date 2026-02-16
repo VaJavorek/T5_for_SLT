@@ -14,18 +14,51 @@ ModelArguments:
   do_sample: True
 
 EvaluationArguments:
-  output_dir: ./results
-  model_name: T5_YTASL_pretrain
+  output_dir: ./results/uni-sign
+  model_name: uni-sign-ytasl
+  model_type: unisign
   skip_frames: False
 #  Data processing
   split: test
+  # Kept for T5 compatibility; Uni-Sign uses UniSignArguments.max_length.
   max_sequence_length: 250
   max_token_length: 128
 #  Generation parameters
+  # T5 path only (kept intact for backward compatibility).
   model_dir: ./checkpoints/t5-v1_1-base/model.safetensors
   batch_size: 2
+  num_beams: 5
+  length_penalty: 0.6
+  early_stopping: True
+  no_repeat_ngram_size: 3
+  max_new_tokens: 256
+  # Always enabled in script for Uni-Sign generation attention extraction.
+  force_attention_extraction: True
 #  Debugging
   max_val_samples: none
+
+UniSignArguments:
+  finetune: ./checkpoints/checkpoint_0.pth
+  n_registers: 0
+  task: SLT
+  dataset: YTASL
+  normalization: signspace
+  max_length: 256
+  num_workers: 0
+  hidden_dim: 256
+  layout: default
+  register_position: before_all
+  no_adaptive_gcn: False
+  rgb_support: False
+  label_smoothing: 0.2
+  # mT5 backbone path/name used by Uni-Sign.
+  mt5_path: /auto/plzen4-ntis/projects/korpusy_cv/JSALT/Uni-Sign/pretrained_weight/mt5-base
+  # Dataset path overrides (as requested by your Uni-Sign instructions).
+  train_label_path: /auto/plzen4-ntis/projects/korpusy_cv/JSALT/YouTubeASL_split/features/YT.annotations.train.json
+  dev_label_path: /auto/plzen4-ntis/projects/korpusy_cv/JSALT/YouTubeASL_split/features/YT.annotations.dev.json
+  test_label_path: /auto/plzen4-ntis/projects/korpusy_cv/JSALT/YouTubeASL_split/features/YT.annotations.dev.json
+  rgb_dir: ""
+  pose_dir: /auto/plzen4-ntis/projects/korpusy_cv/JSALT/YouTubeASL_v2/data/train/clips_cropped
 
 SignDataArguments:
   data_dir: ./data

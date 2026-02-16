@@ -22,3 +22,4 @@ notepad.txt
 /.vscode
 /data
 >>>>>>> Stashed changes
+*.pyc
